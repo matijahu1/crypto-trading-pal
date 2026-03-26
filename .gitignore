@@ -1,0 +1,13 @@
+_version.py
+.vscode/
+
+venv/
+__pycache__/
+*.py[cod]
+.env
+*$py.class
+
+*/data/**
+/.pytest_cache
+/.vscode
+*.code-workspace
