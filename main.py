@@ -19,7 +19,9 @@ def build_app() -> CommandLoop:
         A ready-to-run CommandLoop.
     """
     # Infrastructure
-    bybit_client = BybitClient()
+    # testnet=False  → mainnet (default).  Flip to True for testnet.
+    # api_key / api_secret are optional — only needed for private endpoints.
+    bybit_client = BybitClient(testnet=False)
 
     # Services
     funding_rate_service = FundingRateService(client=bybit_client, category="linear")

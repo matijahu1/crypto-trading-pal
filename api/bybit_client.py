@@ -1,65 +1,107 @@
 """
-Thin HTTP wrapper around the public Bybit V5 REST API.
+Bybit API client — wraps the official ``pybit`` SDK.
 
 Responsibilities:
-  - Build and execute HTTP requests
-  - Raise on non-200 / error responses
-  - Return raw parsed JSON — no business logic here
+  - Own the pybit session lifecycle and configuration
+  - Translate pybit responses into the same plain-dict shape the rest of the
+    application has always expected
+  - Raise BybitAPIError on any SDK or API-level failure
 
-To swap exchanges later: implement the same interface in a new module.
+The public method signatures are identical to the previous urllib-based
+implementation, so FundingRateService (and every other service) is unaffected.
+
+To swap exchanges: implement the same two public methods in a new module and
+pass it wherever BybitClient is currently injected.
+
+pybit docs: https://github.com/bybit-exchange/pybit
 """
 
-import urllib.request
-import urllib.parse
-import json
+from __future__ import annotations
+
 from typing import Any
 
-
-BASE_URL = "https://api.bybit.com"
+from pybit.unified_trading import HTTP  # pybit >= 5.x unified trading session
 
 
 class BybitAPIError(Exception):
-    """Raised when Bybit returns a non-zero retCode or an HTTP error."""
+    """Raised when pybit or the Bybit API signals an error."""
 
 
 class BybitClient:
-    """Minimal client for the Bybit V5 public REST API."""
+    """
+    Thin adapter around pybit's unified HTTP session.
 
-    def __init__(self, base_url: str = BASE_URL) -> None:
-        self._base_url = base_url.rstrip("/")
+    Configuration
+    -------------
+    testnet : bool
+        ``False``  → mainnet  (https://api.bybit.com)   [default]
+        ``True``   → testnet  (https://api-testnet.bybit.com)
 
-    def _get(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+    api_key / api_secret
+        Only required for authenticated (private) endpoints.
+        All funding-rate and instrument-info calls are public — leave them
+        empty for now; add them when private endpoints are needed.
+
+    Example
+    -------
+    >>> client = BybitClient()                          # mainnet, public only
+    >>> client = BybitClient(testnet=True)              # testnet
+    >>> client = BybitClient(api_key="k", api_secret="s")  # authenticated
+    """
+
+    def __init__(
+        self,
+        testnet: bool = False,
+        api_key: str = "",
+        api_secret: str = "",
+    ) -> None:
         """
-        Perform a GET request and return the parsed JSON body.
-
         Args:
-            path:   API path, e.g. "/v5/market/funding/history"
-            params: Query-string parameters.
-
-        Returns:
-            Parsed JSON response dict.
-
-        Raises:
-            BybitAPIError: On HTTP errors or Bybit retCode != 0.
+            testnet:    Connect to Bybit testnet when True.
+            api_key:    Optional — only needed for private endpoints.
+            api_secret: Optional — only needed for private endpoints.
         """
-        url = self._base_url + path
-        if params:
-            url += "?" + urllib.parse.urlencode(params)
-
-        try:
-            with urllib.request.urlopen(url, timeout=10) as resp:
-                body = json.loads(resp.read().decode())
-        except Exception as exc:
-            raise BybitAPIError(f"HTTP request failed: {exc}") from exc
-
-        if body.get("retCode", 0) != 0:
-            msg = body.get("retMsg", "unknown error")
-            raise BybitAPIError(f"Bybit API error [{body['retCode']}]: {msg}")
-
-        return body
+        # pybit.unified_trading.HTTP is the V5 unified trading session.
+        # Passing empty strings for key/secret is fine for public endpoints.
+        self._session = HTTP(
+            testnet=testnet,
+            api_key=api_key or None,
+            api_secret=api_secret or None,
+        )
 
     # ------------------------------------------------------------------
-    # Public API methods (add more here as features grow)
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _unwrap(response: dict[str, Any], symbol: str | None = None) -> dict[str, Any]:
+        """
+        Validate a pybit response and return it as-is.
+
+        pybit already raises ``InvalidRequestError`` / ``FailedRequestError``
+        for non-zero retCodes when ``recv_window`` is set, but the unified
+        session can also return retCode != 0 silently on some edge cases.
+        This guard makes error handling consistent regardless.
+
+        Args:
+            response: Raw dict returned by any pybit session method.
+            symbol:   Optional symbol name for clearer error messages.
+
+        Returns:
+            The validated response dict (identical object, not a copy).
+
+        Raises:
+            BybitAPIError: If retCode is non-zero.
+        """
+        ret_code = response.get("retCode", 0)
+        if ret_code != 0:
+            msg = response.get("retMsg", "unknown error")
+            raise BybitAPIError(f"Bybit API error [{ret_code}]: {msg}")
+        return response
+
+    # ------------------------------------------------------------------
+    # Public API methods
+    # (signatures are intentionally identical to the old urllib client)
     # ------------------------------------------------------------------
 
     def get_funding_rate_history(
@@ -73,22 +115,32 @@ class BybitClient:
 
         Args:
             symbol:   E.g. "ZECUSDT"
-            category: "linear" for USDT perpetuals, "inverse" for coin-margined
-            limit:    Number of historical entries to return (default 8)
+            category: "linear" for USDT-margined, "inverse" for coin-margined.
+            limit:    Number of records to return (default 8, max 200).
 
         Returns:
-            List of funding rate records ordered newest-first, e.g.:
+            List of funding rate records, newest-first:
             [{"symbol": "ZECUSDT", "fundingRate": "0.0001",
               "fundingRateTimestamp": "1700000000000"}, ...]
 
-        Example raw API call:
-            GET https://api.bybit.com/v5/market/funding/history
-                ?category=linear&symbol=ZECUSDT&limit=8
+        Equivalent pybit call:
+            session.get_funding_rate_history(
+                category="linear", symbol="ZECUSDT", limit=8
+            )
+
+        Raises:
+            BybitAPIError: On API-level errors or network failures.
         """
-        data = self._get(
-            "/v5/market/funding/history",
-            params={"category": category, "symbol": symbol, "limit": limit},
-        )
+        try:
+            response = self._session.get_funding_rate_history(
+                category=category,
+                symbol=symbol,
+                limit=limit,
+            )
+        except Exception as exc:
+            raise BybitAPIError(f"Failed to fetch funding rate history: {exc}") from exc
+
+        data = self._unwrap(response, symbol)
         return data["result"]["list"]
 
     def get_instruments_info(
@@ -101,16 +153,28 @@ class BybitClient:
 
         Args:
             symbol:   E.g. "ZECUSDT"
-            category: "linear" or "inverse"
+            category: "linear" or "inverse".
 
         Returns:
-            Single instrument info dict from Bybit.
+            Single instrument info dict, e.g.:
+            {"symbol": "ZECUSDT", "fundingInterval": 480, ...}
+
+        Equivalent pybit call:
+            session.get_instruments_info(category="linear", symbol="ZECUSDT")
+
+        Raises:
+            BybitAPIError: If symbol is not found or the request fails.
         """
-        data = self._get(
-            "/v5/market/instruments-info",
-            params={"category": category, "symbol": symbol},
-        )
-        items: list[dict] = data["result"]["list"]
+        try:
+            response = self._session.get_instruments_info(
+                category=category,
+                symbol=symbol,
+            )
+        except Exception as exc:
+            raise BybitAPIError(f"Failed to fetch instruments info: {exc}") from exc
+
+        data = self._unwrap(response, symbol)
+        items: list[dict[str, Any]] = data["result"]["list"]
         if not items:
             raise BybitAPIError(f"Symbol '{symbol}' not found on Bybit ({category})")
         return items[0]
