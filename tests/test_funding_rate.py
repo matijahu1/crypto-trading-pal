@@ -66,7 +66,7 @@ class TestFundingRateAnalysis:
         result = service.analyse("zecusdt")
         assert result.symbol == "ZECUSDT"
 
-    def test_correct_number_of_rates(self, service):
+    def test_correct_number_of_rates(self, service: FundingRateService):
         result = service.analyse("ZECUSDT", lookback=8)
         assert len(result.rates) == 8
 

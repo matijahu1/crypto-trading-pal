@@ -178,3 +178,39 @@ class BybitClient:
         if not items:
             raise BybitAPIError(f"Symbol '{symbol}' not found on Bybit ({category})")
         return items[0]
+
+    def get_wallet_balance(self, account_type: str = "UNIFIED") -> list[dict[str, Any]]:
+        """
+        Fetch coin balances for the authenticated account.
+
+        This is a **private** endpoint — api_key and api_secret must be set.
+
+        Args:
+            account_type: "UNIFIED" for the unified trading account (default),
+                          "CONTRACT" for classic derivatives accounts.
+
+        Returns:
+            List of coin balance dicts, e.g.:
+            [{"coin": "BTC", "walletBalance": "0.25",
+              "availableToWithdraw": "0.20"}, ...]
+
+        Equivalent pybit call:
+            session.get_wallet_balance(accountType="UNIFIED")
+
+        Raises:
+            BybitAPIError: On auth failure (retCode 10003/10004) or any other
+                           API / network error.
+        """
+        try:
+            response = self._session.get_wallet_balance(accountType=account_type)
+        except Exception as exc:
+            raise BybitAPIError(f"Failed to fetch wallet balance: {exc}") from exc
+
+        data = self._unwrap(response)
+
+        # Bybit returns a list of accounts; each account has a "coin" sub-list.
+        # We flatten to a single list of coin dicts for simplicity.
+        accounts: list[dict[str, Any]] = data["result"]["list"]
+        if not accounts:
+            return []
+        return accounts[0].get("coin", [])
