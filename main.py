@@ -39,7 +39,7 @@ def main() -> None:
 
     client   = BybitClient(testnet=testnet, api_key=api_key, api_secret=api_secret)
     service  = BalanceService(client=client, account_type="UNIFIED")
-    exporter = BalanceExporter(output_path="balance.csv")
+    exporter = BalanceExporter()  # writes to data/balance.csv by default
 
     print("Fetching wallet balances...")
 
@@ -50,7 +50,7 @@ def main() -> None:
         sys.exit(1)
 
     if not wallet.coins:
-        print("No non-zero balances found. balance.csv was not written.")
+        print("No non-zero balances found. data/balance.csv was not written.")
         return
 
     written_path = exporter.export(wallet)
