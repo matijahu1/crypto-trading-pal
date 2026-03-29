@@ -7,7 +7,7 @@ __pycache__/
 .env
 *$py.class
 
-*/data/**
+data/
 /.pytest_cache
 /.vscode
 *.code-workspace

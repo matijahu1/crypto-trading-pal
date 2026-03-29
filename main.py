@@ -1,11 +1,14 @@
 """
-main.py — application entry point.
+main.py — batch entry point.
 
-All wiring (dependency injection) happens here.
-Nothing in cli/, commands/, or services/ imports from main.py.
+Run this file to export wallet balances to balance.csv:
+    python main.py
+
+For the interactive CLI, run:
+    python cli.py
 
 Credentials are loaded from a .env file via python-dotenv.
-Required for authenticated commands (e.g. balance):
+Required:
     BYBIT_API_KEY=...
     BYBIT_API_SECRET=...
 
@@ -14,52 +17,48 @@ Optional:
 """
 
 import os
+import sys
 from dotenv import load_dotenv
 
-from api.bybit_client import BybitClient
-from services.funding_rate import FundingRateService
+from api.bybit_client import BybitClient, BybitAPIError
 from services.balance import BalanceService
-from commands.show import ShowCommand
-from commands.balance import BalanceCommand
-from cli.loop import CommandLoop
+from exporters.balance_exporter import BalanceExporter
 
 
-def build_app() -> CommandLoop:
-    """
-    Construct and wire all application components.
-
-    Returns:
-        A ready-to-run CommandLoop.
-    """
-    # Load .env into the process environment (safe no-op if file is absent)
+def main() -> None:
+    """Fetch wallet balances and write them to balance.csv."""
     load_dotenv()
 
     api_key    = os.getenv("BYBIT_API_KEY", "")
     api_secret = os.getenv("BYBIT_API_SECRET", "")
     testnet    = os.getenv("BYBIT_TESTNET", "false").lower() == "true"
 
-    # Infrastructure — one shared client for all services
-    bybit_client = BybitClient(
-        testnet=testnet,
-        api_key=api_key,
-        api_secret=api_secret,
-    )
+    if not api_key or not api_secret:
+        print("Error: BYBIT_API_KEY and BYBIT_API_SECRET must be set in your .env file.")
+        sys.exit(1)
 
-    # Services
-    funding_rate_service = FundingRateService(client=bybit_client, category="linear")
-    balance_service      = BalanceService(client=bybit_client, account_type="UNIFIED")
+    client   = BybitClient(testnet=testnet, api_key=api_key, api_secret=api_secret)
+    service  = BalanceService(client=client, account_type="UNIFIED")
+    exporter = BalanceExporter(output_path="balance.csv")
 
-    # Commands  <- add new commands here as the app grows
-    commands = [
-        ShowCommand(funding_rate_service=funding_rate_service),
-        BalanceCommand(balance_service=balance_service),
-        # Future: WatchCommand(funding_rate_service, open_interest_service),
-        # Future: ExportCommand(output_dir="./reports"),
-    ]
+    print("Fetching wallet balances...")
 
-    return CommandLoop(commands=commands)
+    try:
+        wallet = service.get_balances()
+    except BybitAPIError as exc:
+        print(f"Error: could not fetch balances — {exc}")
+        sys.exit(1)
+
+    if not wallet.coins:
+        print("No non-zero balances found. balance.csv was not written.")
+        return
+
+    written_path = exporter.export(wallet)
+
+    print(f"Exported {len(wallet.coins)} coin(s) to {written_path}")
+    for cb in wallet.coins:
+        print(f"  {cb.coin}: total={cb.total}, available={cb.available}")
 
 
 if __name__ == "__main__":
-    app = build_app()
-    app.run()
+    main()

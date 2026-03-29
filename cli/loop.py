@@ -76,4 +76,5 @@ class CommandLoop:
         print("║         Powered by Bybit public API              ║")
         print("╚══════════════════════════════════════════════════╝")
         print("  Type  show <SYMBOL>  to analyse a perpetual.")
+        print("  Type  balance <SYMBOL>  to show balance.")
         print("  Type  exit           to quit.\n")
