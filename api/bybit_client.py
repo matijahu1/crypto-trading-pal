@@ -214,3 +214,38 @@ class BybitClient:
         if not accounts:
             return []
         return accounts[0].get("coin", [])
+
+    def get_positions(self, category: str = "linear") -> list[dict[str, Any]]:
+        """
+        Fetch all open positions for the authenticated account.
+
+        This is a **private** endpoint — api_key and api_secret must be set.
+
+        Args:
+            category: "linear" for USDT-margined perpetuals (default),
+                      "inverse" for coin-margined perpetuals.
+
+        Returns:
+            List of position dicts for all symbols with an open position, e.g.:
+            [{"symbol": "BTCUSDT", "side": "Buy", "size": "0.01",
+              "avgPrice": "65000", "markPrice": "65200",
+              "unrealisedPnl": "2.0"}, ...]
+
+        Equivalent pybit call:
+            session.get_positions(category="linear", settleCoin="USDT")
+
+        Raises:
+            BybitAPIError: On auth failure or any other API / network error.
+        """
+        try:
+            # settleCoin="USDT" fetches all linear positions without requiring
+            # a specific symbol — the only way to get the full position list.
+            response = self._session.get_positions(
+                category=category,
+                settleCoin="USDT" if category == "linear" else "BTC",
+            )
+        except Exception as exc:
+            raise BybitAPIError(f"Failed to fetch positions: {exc}") from exc
+
+        data = self._unwrap(response)
+        return data["result"]["list"]
