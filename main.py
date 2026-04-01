@@ -1,9 +1,10 @@
 """
 main.py — batch entry point.
 
-Exports two CSV files to the data/ directory:
-  1. data/balance.csv          — non-zero wallet balances
-  2. data/futures_positions.csv — open futures positions (non-zero size)
+Exports three CSV files to the data/ directory:
+  1. data/balance.csv                  — non-zero wallet balances
+  2. data/futures_positions.csv        — open futures positions (non-zero size)
+  3. data/ZECUSDT_tradeHistory.csv     — recent trade history for ZECUSDT
 
 Run:
     python main.py
@@ -27,8 +28,10 @@ from dotenv import load_dotenv
 from api.bybit_client import BybitClient, BybitAPIError
 from services.balance import BalanceService
 from services.futures_position import FuturesPositionService
+from services.trade_history import TradeHistoryService
 from exporters.balance_exporter import BalanceExporter
 from exporters.futures_position_exporter import FuturesPositionExporter
+from exporters.trade_history_exporter import make_exporter as make_trade_exporter
 
 
 def main() -> None:
@@ -48,6 +51,7 @@ def main() -> None:
 
     _export_balances(client)
     _export_futures_positions(client)
+    _export_trade_history(client)
 
 
 # ---------------------------------------------------------------------------
@@ -98,6 +102,33 @@ def _export_futures_positions(client: BybitClient) -> None:
     print(f"  Exported {len(snapshot.positions)} position(s) to {path}")
     for p in snapshot.positions:
         print(f"    {p.symbol} {p.side}: size={p.size}, entry={p.entry_price}, pnl={p.unrealized_pnl}")
+
+
+def _export_trade_history(client: BybitClient) -> None:
+    """Fetch trade history for a single contract and write its CSV."""
+    # -----------------------------------------------------------------------
+    # Change SYMBOL here to export a different contract.
+    # -----------------------------------------------------------------------
+    SYMBOL = "ZECUSDT"
+    # -----------------------------------------------------------------------
+
+    print(f"Fetching trade history for {SYMBOL}...")
+
+    service  = TradeHistoryService(client=client, category="linear")
+    exporter = make_trade_exporter(SYMBOL)
+
+    try:
+        history = service.get_history(SYMBOL)
+    except BybitAPIError as exc:
+        print(f"  Error: could not fetch trade history — {exc}")
+        return
+
+    if not history.trades:
+        print(f"  No trade history found for {SYMBOL}. CSV was not written.")
+        return
+
+    path = exporter.export(history)
+    print(f"  Exported {len(history.trades)} trade(s) to {path}")
 
 
 if __name__ == "__main__":
