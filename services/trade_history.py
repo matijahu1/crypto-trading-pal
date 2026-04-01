@@ -4,6 +4,7 @@ services/trade_history.py — service layer for futures trade (execution) histor
 Responsibilities:
   - Fetch raw execution data via the API client
   - Map API field names to clean internal names
+  - Convert millisecond timestamps to human-readable date and time strings
   - Return structured result objects — NOT formatted strings
 
 Follows the same pattern as FuturesPositionService and BalanceService:
@@ -16,6 +17,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Protocol
+
+from utils.time_utils import ms_timestamp_to_date_time
 
 
 # ---------------------------------------------------------------------------
@@ -43,7 +46,8 @@ class Trade:
     side: str        # "Buy" or "Sell"
     price: float     # execution price
     size: float      # executed quantity
-    timestamp: str   # ISO-like ms timestamp string, e.g. "1700000000000"
+    date: str        # UTC date of execution, e.g. "2023-11-14"
+    time: str        # UTC time of execution, e.g. "22:13:20"
 
 
 @dataclass
@@ -110,7 +114,8 @@ class TradeHistoryService:
                 side=entry.get("side", ""),
                 price=float(entry.get("execPrice", 0) or 0),
                 size=float(entry.get("execQty", 0) or 0),
-                timestamp=entry.get("execTime", ""),
+                date=ms_timestamp_to_date_time(entry.get("execTime", ""))[0],
+                time=ms_timestamp_to_date_time(entry.get("execTime", ""))[1],
             )
             for entry in raw
         ]
