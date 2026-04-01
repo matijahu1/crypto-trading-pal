@@ -4,6 +4,37 @@ A Python-based trading assistant designed for cryptocurrency futures trading on 
 
 ---
 
+## 📄 Project Description
+
+`crypto-trading-pal` serves as a bridge between the Bybit API and your local data analysis workflow. Currently, it provides an interactive CLI for real-time inspection and a batch processing engine for exporting account snapshots to CSV.
+
+The **CLI** is primarily intended for quick testing and public data exploration. The core roadmap and all upcoming advanced features—such as PnL calculations and history tracking—are focused exclusively on the **Batch Export** engine to facilitate deep data analysis.
+
+**Upcoming Features (Batch Export Only):**
+* Trade history 
+* LIFO-based (Last-In, First-Out) profit and loss calculations
+
+---
+
+## ✨ Features
+
+### 1. Interactive CLI (Testing & Exploration)
+Used for quick connectivity checks and market snapshots.
+* `balance`: View account equity (requires API key).
+* `show <symbol>`: Displays the **last 8 funding rates** for a specific pair. 
+    * *Note: `show` do not require an API key.*
+
+### 2. CSV Export (Batch Mode)
+Automate data collection for external analysis.
+* Exports balance data to `data/balance.csv`.
+* Exports active futures positions to `data/futures_positions.csv`.
+
+### 3. Bybit Integration
+* Powered by the `pybit` SDK for robust API communication.
+* Secure credential management using `python-dotenv`.
+
+---
+
 ## ⚠️ Disclaimer
 
 **Risk Warning:** Cryptocurrency trading, particularly futures and derivatives, carries a high level of risk and may not be suitable for all investors. You may lose more than your initial investment.
@@ -12,50 +43,10 @@ A Python-based trading assistant designed for cryptocurrency futures trading on 
 
 ---
 
-## 📄 Project Description
+## 🔒 Security Notes
 
-`crypto-trading-pal` serves as a bridge between the Bybit API and your local data analysis workflow. Currently, it provides an interactive CLI for real-time inspection and a batch processing engine for exporting account snapshots to CSV.
+Credential Handling: Never commit your .env file. It is included in .gitignore to prevent accidental leaks of your API keys.
 
-The project is designed to evolve into a comprehensive analysis suite, with upcoming support for:
-* Detailed trade history processing.
-* Real-time position tracking.
-* LIFO-based (Last-In, First-Out) profit and loss calculations.
+Minimal Permissions: When creating Bybit API keys, use Read-Only permissions for data analysis. If using trading features, ensure keys have no withdrawal permissions.
 
----
-
-## ✨ Features
-
-### 1. Interactive CLI
-Perform quick inspections and verify API connectivity through a dedicated command-line interface.
-* **Balance:** View current account equity and asset distribution.
-* **Show:** Inspect active futures positions.
-
-### 2. CSV Export (Batch Mode)
-Automate data collection for external analysis.
-* Exports balance data to `data/balance.csv`.
-* Exports active futures positions to `data/futures_positions.csv`.
-* **Smart I/O:** Automatically manages the `/data` directory and ensures exports are current.
-
-### 3. Bybit Integration
-* Powered by the `pybit` SDK for robust API communication.
-* Secure credential management using `python-dotenv`.
-
----
-
-## 📂 Project Structure
-
-The project follows a clean, modular architecture:
-
-```text
-crypto-trading-pal/
-├── clients/          # API client wrappers and Bybit SDK initialization
-├── commands/         # Logic for CLI commands
-├── exporters/        # CSV generation and file handling logic
-├── services/         # Business logic and data processing
-├── tests/            # Unit and integration tests (pytest)
-├── data/             # Local storage for CSV exports (git-ignored)
-├── cli.py            # Entry point for interactive mode
-├── main.py           # Entry point for batch export mode
-├── .env              # Private API credentials (never committed)
-├── .env.example      # Template for environment variables
-└── requirements.txt  # Project dependencies
+Local Data Only: The data/ directory is excluded from version control to ensure your financial history remains private and local to your machine.
