@@ -290,3 +290,46 @@ class BybitClient:
 
         data = self._unwrap(response, symbol)
         return data["result"]["list"]
+
+    def get_order_history(
+        self,
+        symbol: str,
+        category: str = "linear",
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """
+        Fetch order history for a single symbol.
+
+        This is a **private** endpoint — api_key and api_secret must be set.
+
+        Args:
+            symbol:   Perpetual futures symbol, e.g. "ZECUSDT".
+            category: "linear" for USDT-margined perpetuals (default),
+                      "inverse" for coin-margined perpetuals.
+            limit:    Number of orders to return. Max 50 per Bybit's API.
+
+        Returns:
+            List of order dicts, newest-first, e.g.:
+            [{"orderId": "abc123", "symbol": "ZECUSDT", "side": "Buy",
+              "orderType": "Limit", "price": "30.5", "qty": "10",
+              "orderStatus": "Filled",
+              "createdTime": "1700000000000",
+              "updatedTime": "1700000060000"}, ...]
+
+        Equivalent pybit call:
+            session.get_order_history(category="linear", symbol="ZECUSDT", limit=50)
+
+        Raises:
+            BybitAPIError: On auth failure or any other API / network error.
+        """
+        try:
+            response = self._session.get_order_history(
+                category=category,
+                symbol=symbol,
+                limit=limit,
+            )
+        except Exception as exc:
+            raise BybitAPIError(f"Failed to fetch order history: {exc}") from exc
+
+        data = self._unwrap(response, symbol)
+        return data["result"]["list"]

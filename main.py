@@ -1,10 +1,11 @@
 """
 main.py — batch entry point.
 
-Exports three CSV files to the data/ directory:
+Exports four CSV files to the data/ directory:
   1. data/balance.csv                  — non-zero wallet balances
   2. data/futures_positions.csv        — open futures positions (non-zero size)
-  3. data/ZECUSDT_tradeHistory.csv     — recent trade history for ZECUSDT
+  3. data/ZECUSDT_tradeHistory.csv     — recent trade executions for ZECUSDT
+  4. data/ZECUSDT_orderHistory.csv     — recent order history for ZECUSDT
 
 Run:
     python main.py
@@ -29,9 +30,11 @@ from api.bybit_client import BybitClient, BybitAPIError
 from services.balance import BalanceService
 from services.futures_position import FuturesPositionService
 from services.trade_history import TradeHistoryService
+from services.order_history import OrderHistoryService
 from exporters.balance_exporter import BalanceExporter
 from exporters.futures_position_exporter import FuturesPositionExporter
 from exporters.trade_history_exporter import make_exporter as make_trade_exporter
+from exporters.order_history_exporter import make_exporter as make_order_exporter
 
 
 def main() -> None:
@@ -52,6 +55,7 @@ def main() -> None:
     _export_balances(client)
     _export_futures_positions(client)
     _export_trade_history(client)
+    _export_order_history(client)
 
 
 # ---------------------------------------------------------------------------
@@ -129,6 +133,33 @@ def _export_trade_history(client: BybitClient) -> None:
 
     path = exporter.export(history)
     print(f"  Exported {len(history.trades)} trade(s) to {path}")
+
+
+def _export_order_history(client: BybitClient) -> None:
+    """Fetch order history for a single contract and write its CSV."""
+    # -----------------------------------------------------------------------
+    # Change SYMBOL here to export a different contract.
+    # -----------------------------------------------------------------------
+    SYMBOL = "ZECUSDT"
+    # -----------------------------------------------------------------------
+
+    print(f"Fetching order history for {SYMBOL}...")
+
+    service  = OrderHistoryService(client=client, category="linear")
+    exporter = make_order_exporter(SYMBOL)
+
+    try:
+        history = service.get_history(SYMBOL)
+    except BybitAPIError as exc:
+        print(f"  Error: could not fetch order history — {exc}")
+        return
+
+    if not history.orders:
+        print(f"  No order history found for {SYMBOL}. CSV was not written.")
+        return
+
+    path = exporter.export(history)
+    print(f"  Exported {len(history.orders)} order(s) to {path}")
 
 
 if __name__ == "__main__":
