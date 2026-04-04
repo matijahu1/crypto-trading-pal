@@ -1,0 +1,10 @@
+{
+    "logging": {
+        "enabled": true,
+        "level": "DEBUG",
+        "log_to_file": true
+    },
+    "paths": {
+        "log_file": "bybit_bot.log"
+    }
+}

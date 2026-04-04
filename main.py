@@ -13,19 +13,18 @@ Run:
 For the interactive CLI, run:
     python cli.py
 
-Credentials are loaded from a .env file via python-dotenv.
-Required:
-    BYBIT_API_KEY=...
-    BYBIT_API_SECRET=...
-
-Optional:
-    BYBIT_TESTNET=true   (defaults to false / mainnet)
+Credentials are loaded from a .env file (BYBIT_API_KEY, BYBIT_API_SECRET).
+Application settings (logging, paths) are loaded from data/config.json.
 """
 
+import logging
 import os
 import sys
+
 from dotenv import load_dotenv
 
+from config.config_loader import load_config, ConfigError
+from config.logging_setup import setup_logging
 from api.bybit_client import BybitClient, BybitAPIError
 from services.balance import BalanceService
 from services.futures_position import FuturesPositionService
@@ -36,26 +35,47 @@ from exporters.futures_position_exporter import FuturesPositionExporter
 from exporters.trade_history_exporter import make_exporter as make_trade_exporter
 from exporters.order_history_exporter import make_exporter as make_order_exporter
 
+log = logging.getLogger(__name__)
+
 
 def main() -> None:
-    """Run all batch exports sequentially."""
-    load_dotenv()
+    """Bootstrap configuration, then run all batch exports sequentially."""
 
+    # 1. Load application config (data/config.json) — must come first
+    try:
+        config = load_config()
+    except ConfigError as exc:
+        # Logging is not set up yet, so print is the only option here
+        print(f"Configuration error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    # 2. Set up logging from config — all subsequent output goes through logging
+    setup_logging(config)
+    log.info("Starting batch export run")
+
+    # 3. Load credentials from .env (never stored in config.json)
+    load_dotenv()
     api_key    = os.getenv("BYBIT_API_KEY", "")
     api_secret = os.getenv("BYBIT_API_SECRET", "")
     testnet    = os.getenv("BYBIT_TESTNET", "false").lower() == "true"
 
     if not api_key or not api_secret:
-        print("Error: BYBIT_API_KEY and BYBIT_API_SECRET must be set in your .env file.")
+        log.error(
+            "BYBIT_API_KEY and BYBIT_API_SECRET must be set in your .env file"
+        )
         sys.exit(1)
 
-    # One shared client for all services
+    # 4. Build the shared API client
     client = BybitClient(testnet=testnet, api_key=api_key, api_secret=api_secret)
+    log.debug("BybitClient initialised (testnet=%s)", testnet)
 
+    # 5. Run exports
     _export_balances(client)
     _export_futures_positions(client)
     _export_trade_history(client)
     _export_order_history(client)
+
+    log.info("Batch export run complete")
 
 
 # ---------------------------------------------------------------------------
@@ -64,7 +84,7 @@ def main() -> None:
 
 def _export_balances(client: BybitClient) -> None:
     """Fetch wallet balances and write data/balance.csv."""
-    print("Fetching wallet balances...")
+    log.info("Fetching wallet balances...")
 
     service  = BalanceService(client=client, account_type="UNIFIED")
     exporter = BalanceExporter()
@@ -72,22 +92,22 @@ def _export_balances(client: BybitClient) -> None:
     try:
         wallet = service.get_balances()
     except BybitAPIError as exc:
-        print(f"  Error: could not fetch balances — {exc}")
+        log.error("Could not fetch balances: %s", exc)
         return
 
     if not wallet.coins:
-        print("  No non-zero balances found. data/balance.csv was not written.")
+        log.warning("No non-zero balances found — data/balance.csv was not written")
         return
 
     path = exporter.export(wallet)
-    print(f"  Exported {len(wallet.coins)} coin(s) to {path}")
+    log.info("Exported %d coin(s) to %s", len(wallet.coins), path)
     for cb in wallet.coins:
-        print(f"    {cb.coin}: total={cb.total}, available={cb.available}")
+        log.debug("  %s: total=%s, available=%s", cb.coin, cb.total, cb.available)
 
 
 def _export_futures_positions(client: BybitClient) -> None:
     """Fetch open futures positions and write data/futures_positions.csv."""
-    print("Fetching futures positions...")
+    log.info("Fetching futures positions...")
 
     service  = FuturesPositionService(client=client, category="linear")
     exporter = FuturesPositionExporter()
@@ -95,17 +115,20 @@ def _export_futures_positions(client: BybitClient) -> None:
     try:
         snapshot = service.get_positions()
     except BybitAPIError as exc:
-        print(f"  Error: could not fetch positions — {exc}")
+        log.error("Could not fetch positions: %s", exc)
         return
 
     if not snapshot.positions:
-        print("  No open positions found. data/futures_positions.csv was not written.")
+        log.warning("No open positions found — data/futures_positions.csv was not written")
         return
 
     path = exporter.export(snapshot)
-    print(f"  Exported {len(snapshot.positions)} position(s) to {path}")
+    log.info("Exported %d position(s) to %s", len(snapshot.positions), path)
     for p in snapshot.positions:
-        print(f"    {p.symbol} {p.side}: size={p.size}, entry={p.entry_price}, pnl={p.unrealized_pnl}")
+        log.debug(
+            "  %s %s: size=%s, entry=%s, pnl=%s",
+            p.symbol, p.side, p.size, p.entry_price, p.unrealized_pnl,
+        )
 
 
 def _export_trade_history(client: BybitClient) -> None:
@@ -116,7 +139,7 @@ def _export_trade_history(client: BybitClient) -> None:
     SYMBOL = "ZECUSDT"
     # -----------------------------------------------------------------------
 
-    print(f"Fetching trade history for {SYMBOL}...")
+    log.info("Fetching trade history for %s...", SYMBOL)
 
     service  = TradeHistoryService(client=client, category="linear")
     exporter = make_trade_exporter(SYMBOL)
@@ -124,15 +147,15 @@ def _export_trade_history(client: BybitClient) -> None:
     try:
         history = service.get_history(SYMBOL)
     except BybitAPIError as exc:
-        print(f"  Error: could not fetch trade history — {exc}")
+        log.error("Could not fetch trade history: %s", exc)
         return
 
     if not history.trades:
-        print(f"  No trade history found for {SYMBOL}. CSV was not written.")
+        log.warning("No trade history found for %s — CSV was not written", SYMBOL)
         return
 
     path = exporter.export(history)
-    print(f"  Exported {len(history.trades)} trade(s) to {path}")
+    log.info("Exported %d trade(s) to %s", len(history.trades), path)
 
 
 def _export_order_history(client: BybitClient) -> None:
@@ -143,7 +166,7 @@ def _export_order_history(client: BybitClient) -> None:
     SYMBOL = "ZECUSDT"
     # -----------------------------------------------------------------------
 
-    print(f"Fetching order history for {SYMBOL}...")
+    log.info("Fetching order history for %s...", SYMBOL)
 
     service  = OrderHistoryService(client=client, category="linear")
     exporter = make_order_exporter(SYMBOL)
@@ -151,15 +174,15 @@ def _export_order_history(client: BybitClient) -> None:
     try:
         history = service.get_history(SYMBOL)
     except BybitAPIError as exc:
-        print(f"  Error: could not fetch order history — {exc}")
+        log.error("Could not fetch order history: %s", exc)
         return
 
     if not history.orders:
-        print(f"  No order history found for {SYMBOL}. CSV was not written.")
+        log.warning("No order history found for %s — CSV was not written", SYMBOL)
         return
 
     path = exporter.export(history)
-    print(f"  Exported {len(history.orders)} order(s) to {path}")
+    log.info("Exported %d order(s) to %s", len(history.orders), path)
 
 
 if __name__ == "__main__":

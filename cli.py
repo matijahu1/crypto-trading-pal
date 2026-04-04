@@ -4,21 +4,21 @@ cli.py — interactive CLI entry point.
 Run this file to start the interactive terminal:
     python cli.py
 
-All wiring (dependency injection) happens here.
-Nothing in cli/, commands/, or services/ imports from this file.
+For the batch exporter, run:
+    python main.py
 
-Credentials are loaded from a .env file via python-dotenv.
-Required for authenticated commands (e.g. balance):
-    BYBIT_API_KEY=...
-    BYBIT_API_SECRET=...
-
-Optional:
-    BYBIT_TESTNET=true   (defaults to false / mainnet)
+Credentials are loaded from a .env file (BYBIT_API_KEY, BYBIT_API_SECRET).
+Application settings (logging, paths) are loaded from data/config.json.
 """
 
+import logging
 import os
+import sys
+
 from dotenv import load_dotenv
 
+from config.config_loader import load_config, ConfigError
+from config.logging_setup import setup_logging
 from api.bybit_client import BybitClient
 from services.funding_rate import FundingRateService
 from services.balance import BalanceService
@@ -26,17 +26,29 @@ from commands.show import ShowCommand
 from commands.balance import BalanceCommand
 from cli.loop import CommandLoop
 
+log = logging.getLogger(__name__)
+
 
 def build_app() -> CommandLoop:
     """
-    Construct and wire all application components.
+    Bootstrap config + logging, then construct and wire all CLI components.
 
     Returns:
         A ready-to-run CommandLoop.
     """
-    # Load .env into the process environment (safe no-op if file is absent)
-    load_dotenv()
+    # 1. Load application config
+    try:
+        config = load_config()
+    except ConfigError as exc:
+        print(f"Configuration error: {exc}", file=sys.stderr)
+        sys.exit(1)
 
+    # 2. Set up logging
+    setup_logging(config)
+    log.debug("CLI starting up")
+
+    # 3. Load credentials from .env
+    load_dotenv()
     api_key    = os.getenv("BYBIT_API_KEY", "")
     api_secret = os.getenv("BYBIT_API_SECRET", "")
     testnet    = os.getenv("BYBIT_TESTNET", "false").lower() == "true"
@@ -47,17 +59,16 @@ def build_app() -> CommandLoop:
         api_key=api_key,
         api_secret=api_secret,
     )
+    log.debug("BybitClient initialised (testnet=%s)", testnet)
 
     # Services
     funding_rate_service = FundingRateService(client=bybit_client, category="linear")
     balance_service      = BalanceService(client=bybit_client, account_type="UNIFIED")
 
-    # Commands  <- add new commands here as the app grows
+    # Commands
     commands = [
         ShowCommand(funding_rate_service=funding_rate_service),
         BalanceCommand(balance_service=balance_service),
-        # Future: WatchCommand(funding_rate_service, open_interest_service),
-        # Future: ExportCommand(output_dir="./reports"),
     ]
 
     return CommandLoop(commands=commands)
