@@ -1,11 +1,14 @@
 """
 main.py — batch entry point.
 
-Exports four CSV files to the data/ directory:
-  1. data/balance.csv                  — non-zero wallet balances
-  2. data/futures_positions.csv        — open futures positions (non-zero size)
-  3. data/ZECUSDT_tradeHistory.csv     — recent trade executions for ZECUSDT
-  4. data/ZECUSDT_orderHistory.csv     — recent order history for ZECUSDT
+Which exports run is controlled by the "actions.enabled" list in
+data/config.json.  Comment out or remove any action name to skip that step.
+
+Available action names:
+  "export_balances"          → data/balance.csv
+  "export_futures_positions" → data/futures_positions.csv
+  "export_trade_history"     → data/ZECUSDT_tradeHistory.csv
+  "export_order_history"     → data/ZECUSDT_orderHistory.csv
 
 Run:
     python main.py
@@ -14,12 +17,13 @@ For the interactive CLI, run:
     python cli.py
 
 Credentials are loaded from a .env file (BYBIT_API_KEY, BYBIT_API_SECRET).
-Application settings (logging, paths) are loaded from data/config.json.
+Application settings (logging, actions, paths) are loaded from data/config.json.
 """
 
 import logging
 import os
 import sys
+from typing import Callable
 
 from dotenv import load_dotenv
 
@@ -39,7 +43,7 @@ log = logging.getLogger(__name__)
 
 
 def main() -> None:
-    """Bootstrap configuration, then run all batch exports sequentially."""
+    """Bootstrap configuration, then run the enabled batch exports."""
 
     # 1. Load application config (data/config.json) — must come first
     try:
@@ -49,9 +53,10 @@ def main() -> None:
         print(f"Configuration error: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    # 2. Set up logging from config — all subsequent output goes through logging
+    # 2. Set up logging from config
     setup_logging(config)
     log.info("Starting batch export run")
+    log.debug("Enabled actions: %s", config.enabled_actions)
 
     # 3. Load credentials from .env (never stored in config.json)
     load_dotenv()
@@ -69,13 +74,49 @@ def main() -> None:
     client = BybitClient(testnet=testnet, api_key=api_key, api_secret=api_secret)
     log.debug("BybitClient initialised (testnet=%s)", testnet)
 
-    # 5. Run exports
-    _export_balances(client)
-    _export_futures_positions(client)
-    _export_trade_history(client)
-    _export_order_history(client)
+    # 5. Dispatch — run only the actions listed in config
+    _dispatch(client, config.enabled_actions)
 
     log.info("Batch export run complete")
+
+
+# ---------------------------------------------------------------------------
+# Action registry — maps each config action name to its implementation
+# ---------------------------------------------------------------------------
+
+def _build_registry(client: BybitClient) -> dict[str, Callable[[], None]]:
+    """
+    Return a dict mapping every known action name to a zero-argument callable.
+
+    Adding a new action in future:
+      1. Write the _export_* function below
+      2. Add it to ALL_ACTIONS in config_loader.py
+      3. Register it here
+    """
+    return {
+        "export_balances":          lambda: _export_balances(client),
+        "export_futures_positions": lambda: _export_futures_positions(client),
+        "export_trade_history":     lambda: _export_trade_history(client),
+        "export_order_history":     lambda: _export_order_history(client),
+    }
+
+
+def _dispatch(client: BybitClient, enabled_actions: list[str]) -> None:
+    """
+    Run each action in *enabled_actions* in order.
+
+    Unknown action names are already rejected by load_config(), so by the
+    time we reach here every name is guaranteed to be in the registry.
+    """
+    if not enabled_actions:
+        log.warning("No actions are enabled in config.json — nothing to do")
+        return
+
+    registry = _build_registry(client)
+
+    for action in enabled_actions:
+        log.debug("Running action: %s", action)
+        registry[action]()
 
 
 # ---------------------------------------------------------------------------

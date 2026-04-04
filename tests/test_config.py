@@ -426,3 +426,176 @@ class TestSetupLogging:
         # Assert — still only one handler (not doubled up)
         root = logging.getLogger()
         assert len(root.handlers) == 1
+
+
+# ===========================================================================
+# ActionsConfig — via load_config
+# ===========================================================================
+
+class TestActionsConfig:
+
+    # -----------------------------------------------------------------------
+    # Happy path
+    # -----------------------------------------------------------------------
+
+    def test_all_actions_enabled_by_default_when_section_absent(self, tmp_path):
+        # Arrange — no "actions" key in config
+        cfg_path = tmp_path / "config.json"
+        write_config(cfg_path, {"logging": {"enabled": False}})
+
+        # Act
+        result = load_config(cfg_path)
+
+        # Assert — all four actions present
+        from config.config_loader import ALL_ACTIONS
+        assert result.enabled_actions == ALL_ACTIONS
+
+    def test_subset_of_actions_loaded(self, tmp_path):
+        # Arrange
+        cfg_path = tmp_path / "config.json"
+        write_config(cfg_path, {
+            "actions": {"enabled": ["export_balances", "export_trade_history"]}
+        })
+
+        # Act
+        result = load_config(cfg_path)
+
+        # Assert
+        assert result.enabled_actions == ["export_balances", "export_trade_history"]
+
+    def test_single_action_loaded(self, tmp_path):
+        # Arrange
+        cfg_path = tmp_path / "config.json"
+        write_config(cfg_path, {
+            "actions": {"enabled": ["export_order_history"]}
+        })
+
+        # Act
+        result = load_config(cfg_path)
+
+        # Assert
+        assert result.enabled_actions == ["export_order_history"]
+
+    def test_empty_enabled_list_is_accepted(self, tmp_path):
+        # Arrange — user wants to run nothing (valid, not an error)
+        cfg_path = tmp_path / "config.json"
+        write_config(cfg_path, {"actions": {"enabled": []}})
+
+        # Act
+        result = load_config(cfg_path)
+
+        # Assert
+        assert result.enabled_actions == []
+
+    def test_order_of_actions_is_preserved(self, tmp_path):
+        # Arrange — reversed order
+        cfg_path = tmp_path / "config.json"
+        reversed_actions = [
+            "export_order_history",
+            "export_trade_history",
+            "export_futures_positions",
+            "export_balances",
+        ]
+        write_config(cfg_path, {"actions": {"enabled": reversed_actions}})
+
+        # Act
+        result = load_config(cfg_path)
+
+        # Assert
+        assert result.enabled_actions == reversed_actions
+
+    def test_missing_file_includes_all_actions(self, tmp_path):
+        # Arrange — file does not exist
+        cfg_path = tmp_path / "config.json"
+
+        # Act
+        result = load_config(cfg_path)
+
+        # Assert — defaults include everything
+        from config.config_loader import ALL_ACTIONS
+        assert result.enabled_actions == ALL_ACTIONS
+
+    def test_template_written_when_file_missing_contains_actions(self, tmp_path):
+        # Arrange
+        cfg_path = tmp_path / "config.json"
+        load_config(cfg_path)
+
+        # Act
+        data = json.loads(cfg_path.read_text(encoding="utf-8"))
+
+        # Assert — template includes the actions section
+        assert "actions" in data
+        assert "enabled" in data["actions"]
+        assert isinstance(data["actions"]["enabled"], list)
+
+    def test_all_four_known_actions_in_template(self, tmp_path):
+        # Arrange
+        cfg_path = tmp_path / "config.json"
+        load_config(cfg_path)
+        data = json.loads(cfg_path.read_text(encoding="utf-8"))
+
+        # Act / Assert
+        for action in ["export_balances", "export_futures_positions",
+                       "export_trade_history", "export_order_history"]:
+            assert action in data["actions"]["enabled"]
+
+    def test_enabled_actions_property_on_app_config(self, tmp_path):
+        # Arrange
+        cfg_path = tmp_path / "config.json"
+        write_config(cfg_path, {"actions": {"enabled": ["export_balances"]}})
+
+        # Act
+        result = load_config(cfg_path)
+
+        # Assert — property delegates to actions.enabled
+        assert result.enabled_actions == result.actions.enabled
+
+    # -----------------------------------------------------------------------
+    # Validation errors
+    # -----------------------------------------------------------------------
+
+    def test_unknown_action_name_raises_config_error(self, tmp_path):
+        # Arrange — typo in action name
+        cfg_path = tmp_path / "config.json"
+        write_config(cfg_path, {"actions": {"enabled": ["export_balances", "typo_action"]}})
+
+        # Act / Assert
+        with pytest.raises(ConfigError, match="typo_action"):
+            load_config(cfg_path)
+
+    def test_error_message_lists_known_actions(self, tmp_path):
+        # Arrange
+        cfg_path = tmp_path / "config.json"
+        write_config(cfg_path, {"actions": {"enabled": ["bad_action"]}})
+
+        # Act / Assert
+        with pytest.raises(ConfigError) as exc_info:
+            load_config(cfg_path)
+        assert "export_balances" in str(exc_info.value)
+
+    def test_actions_enabled_not_a_list_raises_config_error(self, tmp_path):
+        # Arrange — "enabled" is a string, not a list
+        cfg_path = tmp_path / "config.json"
+        write_config(cfg_path, {"actions": {"enabled": "export_balances"}})
+
+        # Act / Assert
+        with pytest.raises(ConfigError, match="array"):
+            load_config(cfg_path)
+
+    def test_actions_section_not_an_object_raises_config_error(self, tmp_path):
+        # Arrange
+        cfg_path = tmp_path / "config.json"
+        write_config(cfg_path, {"actions": ["export_balances"]})
+
+        # Act / Assert
+        with pytest.raises(ConfigError):
+            load_config(cfg_path)
+
+    def test_non_string_item_in_enabled_list_raises_config_error(self, tmp_path):
+        # Arrange — list contains a number instead of a string
+        cfg_path = tmp_path / "config.json"
+        write_config(cfg_path, {"actions": {"enabled": [42]}})
+
+        # Act / Assert
+        with pytest.raises(ConfigError):
+            load_config(cfg_path)

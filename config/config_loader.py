@@ -29,6 +29,18 @@ CONFIG_PATH    = DATA_DIR / "config.json"
 
 
 # ---------------------------------------------------------------------------
+# All known action names — used for validation and as template defaults
+# ---------------------------------------------------------------------------
+
+ALL_ACTIONS: list[str] = [
+    "export_balances",
+    "export_futures_positions",
+    "export_trade_history",
+    "export_order_history",
+]
+
+
+# ---------------------------------------------------------------------------
 # Error type
 # ---------------------------------------------------------------------------
 
@@ -37,7 +49,7 @@ class ConfigError(Exception):
 
 
 # ---------------------------------------------------------------------------
-# Config dataclass — one field per supported config key
+# Config dataclasses — one field per supported config key
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -53,16 +65,38 @@ class PathsConfig:
 
 
 @dataclass
+class ActionsConfig:
+    """Controls which batch export steps are executed by main.py."""
+
+    enabled: list[str] = field(default_factory=lambda: list(ALL_ACTIONS))
+    """
+    List of action names to run.  Order is preserved.
+
+    Recognised values:
+      "export_balances"          — fetch wallet balances → data/balance.csv
+      "export_futures_positions" — fetch open positions  → data/futures_positions.csv
+      "export_trade_history"     — fetch trade history   → data/<SYMBOL>_tradeHistory.csv
+      "export_order_history"     — fetch order history   → data/<SYMBOL>_orderHistory.csv
+    """
+
+
+@dataclass
 class AppConfig:
     """Typed representation of config.json."""
 
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     paths:   PathsConfig   = field(default_factory=PathsConfig)
+    actions: ActionsConfig = field(default_factory=ActionsConfig)
 
     @property
     def log_file_path(self) -> pathlib.Path:
         """Absolute path to the log file (always inside data/)."""
         return DATA_DIR / self.paths.log_file
+
+    @property
+    def enabled_actions(self) -> list[str]:
+        """Convenience accessor — the ordered list of actions to execute."""
+        return self.actions.enabled
 
 
 # ---------------------------------------------------------------------------
@@ -117,13 +151,16 @@ def load_config(config_path: pathlib.Path = CONFIG_PATH) -> AppConfig:
 def _parse(data: dict, config_path: pathlib.Path) -> AppConfig:
     """Validate types and build the AppConfig from the raw dict."""
     try:
-        log_raw   = data.get("logging", {})
-        paths_raw = data.get("paths",   {})
+        log_raw     = data.get("logging", {})
+        paths_raw   = data.get("paths",   {})
+        actions_raw = data.get("actions", {})
 
         if not isinstance(log_raw, dict):
             raise ConfigError(f"'logging' must be an object in {config_path}")
         if not isinstance(paths_raw, dict):
             raise ConfigError(f"'paths' must be an object in {config_path}")
+        if not isinstance(actions_raw, dict):
+            raise ConfigError(f"'actions' must be an object in {config_path}")
 
         logging_cfg = LoggingConfig(
             enabled=bool(log_raw.get("enabled",     True)),
@@ -133,17 +170,49 @@ def _parse(data: dict, config_path: pathlib.Path) -> AppConfig:
         paths_cfg = PathsConfig(
             log_file=str(paths_raw.get("log_file", "bybit_bot.log")),
         )
+        actions_cfg = _parse_actions(actions_raw, config_path)
 
     except (TypeError, ValueError) as exc:
         raise ConfigError(
             f"Invalid value in {config_path}: {exc}"
         ) from exc
 
-    return AppConfig(logging=logging_cfg, paths=paths_cfg)
+    return AppConfig(logging=logging_cfg, paths=paths_cfg, actions=actions_cfg)
+
+
+def _parse_actions(actions_raw: dict, config_path: pathlib.Path) -> ActionsConfig:
+    """
+    Parse and validate the 'actions' block.
+
+    The 'enabled' key must be a list of strings.  Unknown action names
+    raise ConfigError so typos are caught early rather than silently skipped.
+    """
+    enabled_raw = actions_raw.get("enabled", list(ALL_ACTIONS))
+
+    if not isinstance(enabled_raw, list):
+        raise ConfigError(
+            f"'actions.enabled' must be a JSON array in {config_path}"
+        )
+
+    enabled: list[str] = []
+    for item in enabled_raw:
+        if not isinstance(item, str):
+            raise ConfigError(
+                f"Every entry in 'actions.enabled' must be a string, "
+                f"got {type(item).__name__!r} in {config_path}"
+            )
+        if item not in ALL_ACTIONS:
+            raise ConfigError(
+                f"Unknown action {item!r} in {config_path}. "
+                f"Known actions: {ALL_ACTIONS}"
+            )
+        enabled.append(item)
+
+    return ActionsConfig(enabled=enabled)
 
 
 def _write_template(config_path: pathlib.Path) -> None:
-    """Write a commented template so the user knows what to configure."""
+    """Write a starter template so the user knows what to configure."""
     template = {
         "logging": {
             "enabled":     True,
@@ -152,6 +221,9 @@ def _write_template(config_path: pathlib.Path) -> None:
         },
         "paths": {
             "log_file": "bybit_bot.log",
+        },
+        "actions": {
+            "enabled": list(ALL_ACTIONS),
         },
     }
     config_path.write_text(
