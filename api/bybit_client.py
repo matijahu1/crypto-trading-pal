@@ -333,3 +333,45 @@ class BybitClient:
 
         data = self._unwrap(response, symbol)
         return data["result"]["list"]
+
+    def get_executions(
+        self,
+        symbol: str,
+        category: str = "linear",
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """
+        Fetch execution history for a single symbol, including fee details.
+
+        This is a **private** endpoint — api_key and api_secret must be set.
+
+        Args:
+            symbol:   Perpetual futures symbol, e.g. "ZECUSDT".
+            category: "linear" for USDT-margined perpetuals (default),
+                      "inverse" for coin-margined perpetuals.
+            limit:    Number of executions to return. Max 100 per Bybit's API.
+
+        Returns:
+            List of execution dicts, newest-first, e.g.:
+            [{"execId": "abc123", "symbol": "ZECUSDT", "side": "Buy",
+              "execPrice": "30.5", "execQty": "10",
+              "execFee": "0.0183", "feeRate": "0.0006",
+              "execType": "Trade", "execTime": "1700000000000"}, ...]
+
+        Equivalent pybit call:
+            session.get_executions(category="linear", symbol="ZECUSDT", limit=100)
+
+        Raises:
+            BybitAPIError: On auth failure or any other API / network error.
+        """
+        try:
+            response = self._session.get_executions(
+                category=category,
+                symbol=symbol,
+                limit=limit,
+            )
+        except Exception as exc:
+            raise BybitAPIError(f"Failed to fetch executions: {exc}") from exc
+
+        data = self._unwrap(response, symbol)
+        return data["result"]["list"]

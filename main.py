@@ -34,10 +34,12 @@ from services.balance import BalanceService
 from services.futures_position import FuturesPositionService
 from services.trade_history import TradeHistoryService
 from services.order_history import OrderHistoryService
+from services.executions import ExecutionsService
 from exporters.balance_exporter import BalanceExporter
 from exporters.futures_position_exporter import FuturesPositionExporter
 from exporters.trade_history_exporter import make_exporter as make_trade_exporter
 from exporters.order_history_exporter import make_exporter as make_order_exporter
+from exporters.executions_exporter import make_exporter as make_executions_exporter
 
 log = logging.getLogger(__name__)
 
@@ -98,6 +100,7 @@ def _build_registry(client: BybitClient) -> dict[str, Callable[[], None]]:
         "export_futures_positions": lambda: _export_futures_positions(client),
         "export_trade_history":     lambda: _export_trade_history(client),
         "export_order_history":     lambda: _export_order_history(client),
+        "export_executions":        lambda: _export_executions(client),
     }
 
 
@@ -224,6 +227,33 @@ def _export_order_history(client: BybitClient) -> None:
 
     path = exporter.export(history)
     log.info("Exported %d order(s) to %s", len(history.orders), path)
+
+
+def _export_executions(client: BybitClient) -> None:
+    """Fetch execution history for a single contract and write its CSV."""
+    # -----------------------------------------------------------------------
+    # Change SYMBOL here to export a different contract.
+    # -----------------------------------------------------------------------
+    SYMBOL = "ZECUSDT"
+    # -----------------------------------------------------------------------
+
+    log.info("Fetching executions for %s...", SYMBOL)
+
+    service  = ExecutionsService(client=client, category="linear")
+    exporter = make_executions_exporter(SYMBOL)
+
+    try:
+        history = service.get_executions(SYMBOL)
+    except BybitAPIError as exc:
+        log.error("Could not fetch executions: %s", exc)
+        return
+
+    if not history.executions:
+        log.warning("No executions found for %s — CSV was not written", SYMBOL)
+        return
+
+    path = exporter.export(history)
+    log.info("Exported %d execution(s) to %s", len(history.executions), path)
 
 
 if __name__ == "__main__":

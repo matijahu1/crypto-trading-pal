@@ -37,6 +37,7 @@ ALL_ACTIONS: list[str] = [
     "export_futures_positions",
     "export_trade_history",
     "export_order_history",
+    "export_executions",
 ]
 
 
