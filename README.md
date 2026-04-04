@@ -35,6 +35,19 @@ Automate data collection for external analysis.
 
 ---
 
+## ⚙️ Setup & Installation
+
+### Configuration
+1. **Prepare Data Folder:** Create a '/data' subfolder in the project root.
+2. **Config Setup:** Copy `config.json.example` into your new `/data` folder and rename it to `config.json`.
+Adjust logging levels and folder paths if necessary.
+3. **Environment Secrets:**
+Copy .env.example from the root directory to a new file named .env.
+Open .env and enter your Bybit API Key and Secret.
+Note: Never commit your .env file to version control.
+
+---
+
 ## ⚠️ Disclaimer
 
 **Risk Warning:** Cryptocurrency trading, particularly futures and derivatives, carries a high level of risk and may not be suitable for all investors. You may lose more than your initial investment.
