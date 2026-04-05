@@ -24,6 +24,7 @@ HEADERS = [
     "side",
     "price",
     "size",
+    "exec_type",
     "date",
     "time",
 ]
@@ -61,6 +62,7 @@ class TradeHistoryExporter(CsvExporter):
 
     def rows(self, data: TradeHistory) -> list[list[Any]]:
         return [
-            [t.trade_id, t.symbol, t.side, t.price, t.size, t.date, t.time]
+            [t.trade_id, t.symbol, t.side, t.price, t.size,
+             t.exec_type, t.date, t.time]
             for t in data.trades
         ]
