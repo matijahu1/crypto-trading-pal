@@ -180,7 +180,7 @@ def _export_trade_history(client: BybitClient) -> None:
     # -----------------------------------------------------------------------
     # Change SYMBOL here to export a different contract.
     # -----------------------------------------------------------------------
-    SYMBOL = "ZECUSDT"
+    SYMBOL = "AXSUSDT"
     # -----------------------------------------------------------------------
 
     log.info("Fetching trade history for %s...", SYMBOL)

@@ -308,6 +308,8 @@ class BybitClient:
         symbol: str,
         category: str = "linear",
         limit: int = 50,
+        start_time: int | None = None,
+        end_time: int | None = None,
     ) -> list[dict[str, Any]]:
         """
         Fetch order history for a single symbol.
@@ -315,13 +317,18 @@ class BybitClient:
         This is a **private** endpoint — api_key and api_secret must be set.
 
         Args:
-            symbol:   Perpetual futures symbol, e.g. "ZECUSDT".
-            category: "linear" for USDT-margined perpetuals (default),
-                      "inverse" for coin-margined perpetuals.
-            limit:    Number of orders to return. Max 50 per Bybit's API.
+            symbol:     Perpetual futures symbol, e.g. "ZECUSDT".
+            category:   "linear" for USDT-margined perpetuals (default),
+                        "inverse" for coin-margined perpetuals.
+            limit:      Number of orders to return. Max 50 per Bybit's API.
+            start_time: Optional window start as a Unix ms timestamp (inclusive).
+                        Filters by createdTime. When provided, end_time must
+                        also be provided.
+            end_time:   Optional window end as a Unix ms timestamp (inclusive).
+                        Filters by createdTime.
 
         Returns:
-            List of order dicts, newest-first, e.g.:
+            List of order dicts, newest-first by createdTime, e.g.:
             [{"orderId": "abc123", "symbol": "ZECUSDT", "side": "Buy",
               "orderType": "Limit", "price": "30.5", "qty": "10",
               "orderStatus": "Filled",
@@ -329,17 +336,24 @@ class BybitClient:
               "updatedTime": "1700000060000"}, ...]
 
         Equivalent pybit call:
-            session.get_order_history(category="linear", symbol="ZECUSDT", limit=50)
+            session.get_order_history(category="linear", symbol="ZECUSDT",
+                                      startTime=..., endTime=..., limit=50)
 
         Raises:
             BybitAPIError: On auth failure or any other API / network error.
         """
+        kwargs: dict[str, Any] = dict(
+            category=category,
+            symbol=symbol,
+            limit=limit,
+        )
+        if start_time is not None:
+            kwargs["startTime"] = start_time
+        if end_time is not None:
+            kwargs["endTime"] = end_time
+
         try:
-            response = self._session.get_order_history(
-                category=category,
-                symbol=symbol,
-                limit=limit,
-            )
+            response = self._session.get_order_history(**kwargs)
         except Exception as exc:
             raise BybitAPIError(f"Failed to fetch order history: {exc}") from exc
 
