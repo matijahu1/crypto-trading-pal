@@ -1,0 +1,292 @@
+"""
+services/order_history.py — service layer for futures order history.
+
+Responsibilities:
+  - Read symbol and lookback period from config.json via OrderHistoryConfig
+  - Split the lookback period into 7-day windows (Bybit API limit)
+  - Fetch each window separately, paging within it until results are exhausted
+  - Map API field names to clean internal names
+  - Preserve original API timestamps alongside derived date/time strings
+  - Sort the final result by updatedTime DESC (newest first)
+  - Return structured result objects — NOT formatted strings
+"""
+
+from __future__ import annotations
+
+import datetime
+import logging
+from dataclasses import dataclass
+from typing import Any, Protocol
+
+from utils.time_utils import ms_timestamp_to_date_time
+
+log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Time-window constants
+# ---------------------------------------------------------------------------
+
+MAX_WINDOW_DAYS = 7
+"""
+Maximum days per single API request.
+Bybit rejects requests where endTime - startTime > 7 days.
+Do not change this value.
+"""
+
+_MS_PER_DAY = 24 * 60 * 60 * 1_000
+
+# Keep a module-level default for backward compatibility and tests
+# that don't go through config.  The live value comes from config.json.
+LOOKBACK_DAYS = 30
+
+
+# ---------------------------------------------------------------------------
+# Protocol — decouples the service from the concrete client (mockable in tests)
+# ---------------------------------------------------------------------------
+
+class OrderHistoryClientProtocol(Protocol):
+    """Minimal interface the service needs from an exchange API client."""
+
+    def get_order_history(
+        self,
+        symbol: str,
+        category: str,
+        limit: int,
+        start_time: int | None = None,
+        end_time: int | None = None,
+    ) -> list[dict[str, Any]]: ...
+
+
+# ---------------------------------------------------------------------------
+# Result dataclasses
+# ---------------------------------------------------------------------------
+
+@dataclass
+class Order:
+    """A single historical order."""
+
+    order_id: str        # unique order ID
+    symbol: str
+    side: str            # "Buy" or "Sell"
+    order_type: str      # "Market" or "Limit"
+    price: float         # order price (0.0 for Market orders)
+    qty: float           # order quantity
+    order_status: str    # e.g. "Filled", "Cancelled", "PartiallyFilled"
+    created_ts: str      # raw createdTime from API, e.g. "1700000000000"
+    updated_ts: str      # raw updatedTime from API, e.g. "1700000060000"
+    created_date: str    # UTC date of order creation, e.g. "2023-11-14"
+    created_time: str    # UTC time of order creation, e.g. "22:13:20"
+    updated_date: str    # UTC date of last status change
+    updated_time: str    # UTC time of last status change
+
+
+@dataclass
+class OrderHistory:
+    """A batch of orders for one symbol."""
+
+    symbol: str
+    category: str
+    orders: list[Order]   # sorted by updatedTime DESC
+
+
+# ---------------------------------------------------------------------------
+# Service
+# ---------------------------------------------------------------------------
+
+class OrderHistoryService:
+    """
+    Fetches order history for a single futures contract.
+
+    Configuration
+    -------------
+    Symbol and lookback period are read from config.json at the project root
+    via load_order_history_config().  Pass them explicitly to __init__ when
+    calling from tests or when you want to override the config values.
+
+    Time-window strategy
+    --------------------
+    Bybit limits each request to a 7-day window (startTime..endTime),
+    filtering by createdTime.  To cover the full lookback period we
+    divide it into fixed 7-day slices and iterate backwards from now:
+
+        global_start = now - lookback_days
+        end_time     = now
+
+        while end_time > global_start:
+            start_time = max(end_time - 7 days, global_start)
+            fetch all pages within [start_time, end_time]   ← inner loop
+            end_time = start_time - 1                       ← advance window
+
+    Inner-loop paging (within one 7-day window)
+    --------------------------------------------
+    Each API call returns up to `limit` records newest-first by createdTime.
+    After each page we move the upper boundary down to just below the oldest
+    createdTime on that page.  We stop the inner loop when a page is empty.
+
+    Empty-window handling
+    ---------------------
+    An empty page ends only the inner loop for that window.  The outer loop
+    always continues — gaps in order activity must not abort the full fetch.
+
+    Sorting
+    -------
+    After all pages across all windows are collected, orders are sorted by
+    updatedTime DESC (newest first) before being returned.
+
+    Duplicate guard
+    ---------------
+    A set of seen orderIds prevents duplicates at window boundaries.
+    """
+
+    def __init__(
+        self,
+        client: OrderHistoryClientProtocol,
+        category: str = "linear",
+        limit: int = 50,
+        lookback_days: int = LOOKBACK_DAYS,
+    ) -> None:
+        """
+        Args:
+            client:        API client satisfying OrderHistoryClientProtocol.
+            category:      Bybit instrument category ("linear" or "inverse").
+            limit:         Max orders per API call (Bybit maximum: 50).
+            lookback_days: Number of calendar days to look back.
+                           Defaults to the module constant; overridden by
+                           values loaded from config.json in main.py.
+        """
+        self._client       = client
+        self._category     = category
+        self._limit        = limit
+        self._lookback_days = lookback_days
+
+    def get_history(self, symbol: str) -> OrderHistory:
+        """
+        Return all orders for *symbol* within the last lookback_days.
+
+        Args:
+            symbol: Perpetual futures symbol, e.g. "ZECUSDT".
+                    Uppercase is enforced automatically.
+
+        Returns:
+            OrderHistory dataclass. Orders are sorted by updatedTime DESC.
+            The list may be empty if there are no orders in the period.
+
+        Raises:
+            BybitAPIError: Propagated from the client on network / API errors.
+        """
+        symbol = symbol.upper()
+
+        now_ms       = _now_ms()
+        global_start = now_ms - self._lookback_days * _MS_PER_DAY
+        end_time     = now_ms
+
+        log.debug(
+            "Order history fetch started: symbol=%s lookback=%dd "
+            "global_start=%d now=%d",
+            symbol, self._lookback_days, global_start, now_ms,
+        )
+
+        all_orders: list[Order] = []
+        seen_ids:   set[str]   = set()
+
+        # ── Outer loop: iterate backwards through 7-day windows ──────────────
+        while end_time > global_start:
+
+            start_time = max(end_time - MAX_WINDOW_DAYS * _MS_PER_DAY,
+                             global_start)
+
+            log.debug(
+                "  Window: start=%d  end=%d  (%.1f days)",
+                start_time, end_time,
+                (end_time - start_time) / _MS_PER_DAY,
+            )
+
+            # ── Inner loop: page through this 7-day window ───────────────────
+            window_end = end_time   # slides down as we page through results
+
+            while True:
+                page = self._client.get_order_history(
+                    symbol=symbol,
+                    category=self._category,
+                    limit=self._limit,
+                    start_time=start_time,
+                    end_time=window_end,
+                )
+
+                if not page:
+                    log.debug("    Empty page — window exhausted")
+                    break
+
+                oldest_created: int = window_end   # overwritten below
+
+                for entry in page:
+                    order_id     = entry.get("orderId", "")
+                    created_ts   = entry.get("createdTime", "")
+                    updated_ts   = entry.get("updatedTime", "")
+                    created_ms   = int(created_ts or 0)
+
+                    if created_ms < oldest_created:
+                        oldest_created = created_ms
+
+                    # Deduplicate across window boundaries
+                    if order_id and order_id in seen_ids:
+                        continue
+                    if order_id:
+                        seen_ids.add(order_id)
+
+                    all_orders.append(Order(
+                        order_id=order_id,
+                        symbol=entry.get("symbol", symbol),
+                        side=entry.get("side", ""),
+                        order_type=entry.get("orderType", ""),
+                        price=float(entry.get("price", 0) or 0),
+                        qty=float(entry.get("qty", 0) or 0),
+                        order_status=entry.get("orderStatus", ""),
+                        created_ts=created_ts,
+                        updated_ts=updated_ts,
+                        created_date=ms_timestamp_to_date_time(created_ts)[0],
+                        created_time=ms_timestamp_to_date_time(created_ts)[1],
+                        updated_date=ms_timestamp_to_date_time(updated_ts)[0],
+                        updated_time=ms_timestamp_to_date_time(updated_ts)[1],
+                    ))
+
+                log.debug(
+                    "    Page: %d record(s), oldest createdTime=%d, total so far=%d",
+                    len(page), oldest_created, len(all_orders),
+                )
+
+                # Slide the upper boundary down for the next inner-loop page
+                window_end = oldest_created - 1
+
+                # Safety: stop if paging would go before this window's start
+                if window_end < start_time:
+                    break
+
+            # Advance outer window
+            end_time = start_time - 1
+
+        # ── Sort by updatedTime DESC (newest first) ───────────────────────────
+        all_orders.sort(
+            key=lambda o: int(o.updated_ts) if o.updated_ts else 0,
+            reverse=True,
+        )
+
+        log.info(
+            "Order history complete: %d order(s) over %d day(s) for %s",
+            len(all_orders), self._lookback_days, symbol,
+        )
+
+        return OrderHistory(
+            symbol=symbol,
+            category=self._category,
+            orders=all_orders,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Private helpers
+# ---------------------------------------------------------------------------
+
+def _now_ms() -> int:
+    """Return the current UTC time as a Unix millisecond timestamp."""
+    return int(datetime.datetime.now(tz=datetime.timezone.utc).timestamp() * 1000)

@@ -249,3 +249,155 @@ class BybitClient:
 
         data = self._unwrap(response)
         return data["result"]["list"]
+
+    def get_trade_history(
+        self,
+        symbol: str,
+        category: str = "linear",
+        limit: int = 100,
+        start_time: int | None = None,
+        end_time: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Fetch execution (trade) history for a single symbol.
+
+        This is a **private** endpoint — api_key and api_secret must be set.
+
+        Args:
+            symbol:     Perpetual futures symbol, e.g. "ZECUSDT".
+            category:   "linear" for USDT-margined perpetuals (default),
+                        "inverse" for coin-margined perpetuals.
+            limit:      Number of executions to return. Max 100 per Bybit's API.
+            start_time: Optional window start as a Unix ms timestamp (inclusive).
+                        When provided, end_time must also be provided.
+            end_time:   Optional window end as a Unix ms timestamp (inclusive).
+
+        Returns:
+            List of execution dicts, newest-first, e.g.:
+            [{"execId": "abc123", "symbol": "ZECUSDT", "side": "Buy",
+              "execPrice": "30.5", "execQty": "10", "execTime": "1700000000000"
+             }, ...]
+
+        Equivalent pybit call:
+            session.get_executions(category="linear", symbol="ZECUSDT",
+                                   startTime=..., endTime=..., limit=100)
+
+        Raises:
+            BybitAPIError: On auth failure or any other API / network error.
+        """
+        kwargs: dict[str, Any] = dict(
+            category=category,
+            symbol=symbol,
+            limit=limit,
+        )
+        if start_time is not None:
+            kwargs["startTime"] = start_time
+        if end_time is not None:
+            kwargs["endTime"] = end_time
+
+        try:
+            response = self._session.get_executions(**kwargs)
+        except Exception as exc:
+            raise BybitAPIError(f"Failed to fetch trade history: {exc}") from exc
+
+        data = self._unwrap(response, symbol)
+        return data["result"]["list"]
+
+    def get_order_history(
+        self,
+        symbol: str,
+        category: str = "linear",
+        limit: int = 50,
+        start_time: int | None = None,
+        end_time: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Fetch order history for a single symbol.
+
+        This is a **private** endpoint — api_key and api_secret must be set.
+
+        Args:
+            symbol:     Perpetual futures symbol, e.g. "ZECUSDT".
+            category:   "linear" for USDT-margined perpetuals (default),
+                        "inverse" for coin-margined perpetuals.
+            limit:      Number of orders to return. Max 50 per Bybit's API.
+            start_time: Optional window start as a Unix ms timestamp (inclusive).
+                        Filters by createdTime. When provided, end_time must
+                        also be provided.
+            end_time:   Optional window end as a Unix ms timestamp (inclusive).
+                        Filters by createdTime.
+
+        Returns:
+            List of order dicts, newest-first by createdTime, e.g.:
+            [{"orderId": "abc123", "symbol": "ZECUSDT", "side": "Buy",
+              "orderType": "Limit", "price": "30.5", "qty": "10",
+              "orderStatus": "Filled",
+              "createdTime": "1700000000000",
+              "updatedTime": "1700000060000"}, ...]
+
+        Equivalent pybit call:
+            session.get_order_history(category="linear", symbol="ZECUSDT",
+                                      startTime=..., endTime=..., limit=50)
+
+        Raises:
+            BybitAPIError: On auth failure or any other API / network error.
+        """
+        kwargs: dict[str, Any] = dict(
+            category=category,
+            symbol=symbol,
+            limit=limit,
+        )
+        if start_time is not None:
+            kwargs["startTime"] = start_time
+        if end_time is not None:
+            kwargs["endTime"] = end_time
+
+        try:
+            response = self._session.get_order_history(**kwargs)
+        except Exception as exc:
+            raise BybitAPIError(f"Failed to fetch order history: {exc}") from exc
+
+        data = self._unwrap(response, symbol)
+        return data["result"]["list"]
+
+    def get_executions(
+        self,
+        symbol: str,
+        category: str = "linear",
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """
+        Fetch execution history for a single symbol, including fee details.
+
+        This is a **private** endpoint — api_key and api_secret must be set.
+
+        Args:
+            symbol:   Perpetual futures symbol, e.g. "ZECUSDT".
+            category: "linear" for USDT-margined perpetuals (default),
+                      "inverse" for coin-margined perpetuals.
+            limit:    Number of executions to return. Max 100 per Bybit's API.
+
+        Returns:
+            List of execution dicts, newest-first, e.g.:
+            [{"execId": "abc123", "symbol": "ZECUSDT", "side": "Buy",
+              "execPrice": "30.5", "execQty": "10",
+              "execFee": "0.0183", "feeRate": "0.0006",
+              "execType": "Trade", "execTime": "1700000000000"}, ...]
+
+        Equivalent pybit call:
+            session.get_executions(category="linear", symbol="ZECUSDT", limit=100)
+
+        Raises:
+            BybitAPIError: On auth failure or any other API / network error.
+        """
+        try:
+            response = self._session.get_executions(
+                category=category,
+                symbol=symbol,
+                limit=limit,
+            )
+        except Exception as exc:
+            raise BybitAPIError(f"Failed to fetch executions: {exc}") from exc
+
+        data = self._unwrap(response, symbol)
+        return data["result"]["list"]

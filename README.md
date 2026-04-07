@@ -35,6 +35,34 @@ Automate data collection for external analysis.
 
 ---
 
+## ⚙️ Configuration
+
+To ensure the application runs correctly and your data remains private, follow these configuration steps:
+
+### 1. Prepare Data Folder
+Create a directory named `/data` in the project root. This folder will store your exported CSV files and your local configuration.
+
+### 2. Config Setup
+1. Locate `config.json.example` in the project root.
+2. Copy this file into your newly created `/data` folder.
+3. Rename the copy to `config.json`.
+4. **Customize Actions:** Open `config.json` and remove any actions you do not currently need. The following actions are available:
+   * `"export_balances"`
+   * `"export_futures_positions"`
+   * `"export_trade_history"`
+   * `"export_order_history"`
+   * `"export_executions"`
+
+> [!NOTE]
+> These actions are currently functional but are considered "in-progress." Feel free to test which data exports work best for your needs and provide feedback via GitHub Issues.
+
+### 3. Environment Secrets
+1. Copy the `.env.example` file from the root directory to a new file named `.env`.
+2. Open the `.env` file and enter your Bybit API Key and Secret.
+Note: Never commit your .env file to version control.
+
+---
+
 ## ⚠️ Disclaimer
 
 **Risk Warning:** Cryptocurrency trading, particularly futures and derivatives, carries a high level of risk and may not be suitable for all investors. You may lose more than your initial investment.

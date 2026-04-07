@@ -1,0 +1,19 @@
+{
+    "logging": {
+        "enabled": true,
+        "level": "DEBUG",
+        "log_to_file": true
+    },
+    "paths": {
+        "log_file": "bybit_bot.log"
+    },
+    "actions": {
+        "enabled": [
+            "export_balances",
+            "export_futures_positions",
+            "export_trade_history",
+            "export_order_history",
+            "export_executions"
+        ]
+    }
+}
