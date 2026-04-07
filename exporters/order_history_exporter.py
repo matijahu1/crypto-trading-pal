@@ -6,6 +6,12 @@ Responsibilities:
   - Declare the CSV schema (headers + row mapping)
   - Delegate all filesystem operations to CsvExporter
 
+Column order:
+  order_id, symbol, side, order_type, price, qty, order_status,
+  created_ts, updated_ts,            ← raw API timestamps
+  created_date, created_time,        ← derived from createdTime
+  updated_date, updated_time         ← derived from updatedTime
+
 Output path is dynamic: data/<SYMBOL>_orderHistory.csv
 Use the factory function make_exporter(symbol) to build the correct instance.
 """
@@ -26,6 +32,8 @@ HEADERS = [
     "price",
     "qty",
     "order_status",
+    "created_ts",      # raw createdTime from API
+    "updated_ts",      # raw updatedTime from API
     "created_date",
     "created_time",
     "updated_date",
@@ -73,6 +81,8 @@ class OrderHistoryExporter(CsvExporter):
                 o.price,
                 o.qty,
                 o.order_status,
+                o.created_ts,
+                o.updated_ts,
                 o.created_date,
                 o.created_time,
                 o.updated_date,

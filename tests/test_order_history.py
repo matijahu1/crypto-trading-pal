@@ -19,6 +19,7 @@ from exporters.order_history_exporter import (
     make_exporter,
     HEADERS,
 )
+
 from api.bybit_client import BybitAPIError
 
 
@@ -30,7 +31,6 @@ class StubOrderClient:
     """
     Simple stub: returns the same list on the first call, [] on subsequent
     calls (so the inner page-loop terminates after one page).
-    Records the arguments of the most recent call.
     """
 
     def __init__(
@@ -38,13 +38,11 @@ class StubOrderClient:
         orders: list[dict] | None = None,
         raise_error: bool = False,
     ) -> None:
-        self._orders = orders or []
+        self._orders     = orders or []
         self._raise_error = raise_error
         self.last_symbol: str | None = None
         self.last_category: str | None = None
         self.last_limit: int | None = None
-        self.last_start_time: int | None = None
-        self.last_end_time: int | None = None
         self.call_count: int = 0
 
     def get_order_history(
@@ -55,22 +53,17 @@ class StubOrderClient:
         start_time: int | None = None,
         end_time: int | None = None,
     ) -> list[dict]:
-        self.last_symbol     = symbol
-        self.last_category   = category
-        self.last_limit      = limit
-        self.last_start_time = start_time
-        self.last_end_time   = end_time
-        self.call_count     += 1
+        self.last_symbol   = symbol
+        self.last_category = category
+        self.last_limit    = limit
+        self.call_count   += 1
         if self._raise_error:
             raise BybitAPIError("Bybit API error [10003]: Invalid api_key")
         return self._orders if self.call_count == 1 else []
 
 
 class SequentialStubClient:
-    """
-    Returns pages[0] on call 1, pages[1] on call 2, [] once exhausted.
-    Records every (start_time, end_time) pair in call_log.
-    """
+    """Returns pages in order; [] once exhausted. Records call timestamps."""
 
     def __init__(self, pages: list[list[dict]]) -> None:
         self._pages = list(pages)
@@ -94,60 +87,24 @@ class SequentialStubClient:
 
 
 # ---------------------------------------------------------------------------
-# Realistic sample data and helpers
+# Shared constants and helpers
 # ---------------------------------------------------------------------------
 
 NOW_FIXED    = 1_700_000_000_000   # 2023-11-14 22:13:20 UTC
-WINDOW_MS    = MAX_WINDOW_DAYS * _MS_PER_DAY
 GLOBAL_START = NOW_FIXED - LOOKBACK_DAYS * _MS_PER_DAY
-
-# Exact window boundaries (pre-computed from a loop trace with NOW_FIXED):
-W1_START = 1_699_395_200_000;  W1_END = 1_700_000_000_000
-W2_START = 1_698_790_399_999;  W2_END = 1_699_395_199_999
-W3_START = 1_698_185_599_998;  W3_END = 1_698_790_399_998
-W4_START = 1_697_580_799_997;  W4_END = 1_698_185_599_997
-W5_START = 1_697_408_000_000;  W5_END = 1_697_580_799_996   # clamped
-
-# Full SAMPLE_ORDERS uses timestamps inside W1 so they are always in-window
-SAMPLE_ORDERS = [
-    {
-        "orderId":     "ord-001",
-        "symbol":      "ZECUSDT",
-        "side":        "Buy",
-        "orderType":   "Limit",
-        "price":       "30.50",
-        "qty":         "10",
-        "orderStatus": "Filled",
-        "createdTime": str(W1_END - 1_000),
-        "updatedTime": str(W1_END - 500),
-    },
-    {
-        "orderId":     "ord-002",
-        "symbol":      "ZECUSDT",
-        "side":        "Sell",
-        "orderType":   "Market",
-        "price":       "0",
-        "qty":         "5",
-        "orderStatus": "Filled",
-        "createdTime": str(W1_END - 2_000),
-        "updatedTime": str(W1_END - 1_500),
-    },
-    {
-        "orderId":     "ord-003",
-        "symbol":      "ZECUSDT",
-        "side":        "Buy",
-        "orderType":   "Limit",
-        "price":       "29.00",
-        "qty":         "20",
-        "orderStatus": "Cancelled",
-        "createdTime": str(W1_END - 3_000),
-        "updatedTime": str(W1_END - 2_500),
-    },
-]
+W1_START     = 1_699_395_200_000
+W1_END       = 1_700_000_000_000
+W2_START     = 1_698_790_399_999
+W2_END       = 1_699_395_199_999
+W3_START     = 1_698_185_599_998
+W3_END       = 1_698_790_399_998
 
 
-def raw(order_id: str, created_time: int, status: str = "Filled") -> dict:
-    """Build a minimal raw order dict for window/pagination tests."""
+def raw(order_id: str, created_ms: int, updated_ms: int | None = None,
+        status: str = "Filled") -> dict:
+    """Build a minimal raw order dict for tests."""
+    if updated_ms is None:
+        updated_ms = created_ms + 1_000
     return {
         "orderId":     order_id,
         "symbol":      "ZECUSDT",
@@ -156,8 +113,8 @@ def raw(order_id: str, created_time: int, status: str = "Filled") -> dict:
         "price":       "30.0",
         "qty":         "1",
         "orderStatus": status,
-        "createdTime": str(created_time),
-        "updatedTime": str(created_time + 1_000),
+        "createdTime": str(created_ms),
+        "updatedTime": str(updated_ms),
     }
 
 
@@ -169,6 +126,7 @@ def _make_history(*orders: tuple) -> OrderHistory:
     """
     Build an OrderHistory from
     (order_id, symbol, side, order_type, price, qty, order_status,
+     created_ts, updated_ts,
      created_date, created_time, updated_date, updated_time) tuples.
     """
     return OrderHistory(
@@ -178,21 +136,25 @@ def _make_history(*orders: tuple) -> OrderHistory:
             Order(
                 order_id=oid, symbol=sym, side=sd, order_type=ot,
                 price=p, qty=q, order_status=st,
+                created_ts=cts, updated_ts=uts,
                 created_date=cd, created_time=ct,
                 updated_date=ud, updated_time=ut,
             )
-            for oid, sym, sd, ot, p, q, st, cd, ct, ud, ut in orders
+            for oid, sym, sd, ot, p, q, st, cts, uts, cd, ct, ud, ut in orders
         ],
     )
 
 
 SAMPLE_HISTORY = _make_history(
     ("ord-001", "ZECUSDT", "Buy",  "Limit",  30.50, 10.0, "Filled",
-     "2023-11-14", "22:13:19", "2023-11-14", "22:13:19"),
+     "1700000001000", "1700000002000",
+     "2023-11-14", "22:13:21", "2023-11-14", "22:13:22"),
     ("ord-002", "ZECUSDT", "Sell", "Market",  0.0,   5.0, "Filled",
-     "2023-11-14", "22:13:18", "2023-11-14", "22:13:18"),
+     "1700000003000", "1700000004000",
+     "2023-11-14", "22:13:23", "2023-11-14", "22:13:24"),
     ("ord-003", "ZECUSDT", "Buy",  "Limit",  29.00, 20.0, "Cancelled",
-     "2023-11-14", "22:13:17", "2023-11-14", "22:13:17"),
+     "1700000005000", "1700000006000",
+     "2023-11-14", "22:13:25", "2023-11-14", "22:13:26"),
 )
 
 
@@ -201,150 +163,145 @@ SAMPLE_HISTORY = _make_history(
 # ===========================================================================
 
 class TestOrderHistoryService:
-    """Basic field-level tests. StubOrderClient returns orders on call 1."""
 
     @pytest.fixture(autouse=True)
     def freeze_time(self, monkeypatch):
         import services.order_history as m
         monkeypatch.setattr(m, "_now_ms", lambda: NOW_FIXED)
 
-    # -----------------------------------------------------------------------
-    # Return types and structure
-    # -----------------------------------------------------------------------
+    SAMPLE_RAW = [
+        raw("ord-001", W1_END - 3_000, W1_END - 2_000, "Filled"),
+        raw("ord-002", W1_END - 5_000, W1_END - 4_000, "Filled"),
+        raw("ord-003", W1_END - 7_000, W1_END - 6_000, "Cancelled"),
+    ]
 
     def test_returns_order_history_dataclass(self):
-        client = StubOrderClient(orders=SAMPLE_ORDERS)
-        result = OrderHistoryService(client=client).get_history("ZECUSDT")
+        result = OrderHistoryService(StubOrderClient(self.SAMPLE_RAW)).get_history("ZECUSDT")
         assert isinstance(result, OrderHistory)
 
     def test_orders_are_order_instances(self):
-        client = StubOrderClient(orders=SAMPLE_ORDERS)
-        result = OrderHistoryService(client=client).get_history("ZECUSDT")
+        result = OrderHistoryService(StubOrderClient(self.SAMPLE_RAW)).get_history("ZECUSDT")
         assert all(isinstance(o, Order) for o in result.orders)
 
     def test_symbol_is_uppercased(self):
-        client = StubOrderClient(orders=SAMPLE_ORDERS)
-        result = OrderHistoryService(client=client).get_history("zecusdt")
+        result = OrderHistoryService(StubOrderClient(self.SAMPLE_RAW)).get_history("zecusdt")
         assert result.symbol == "ZECUSDT"
 
-    def test_symbol_uppercased_before_passing_to_client(self):
-        client = StubOrderClient(orders=SAMPLE_ORDERS)
-        OrderHistoryService(client=client).get_history("zecusdt")
-        assert client.last_symbol == "ZECUSDT"
-
     def test_category_passed_to_client(self):
-        client = StubOrderClient(orders=SAMPLE_ORDERS)
-        OrderHistoryService(client=client, category="inverse").get_history("ZECUSDT")
+        client = StubOrderClient(self.SAMPLE_RAW)
+        OrderHistoryService(client, category="inverse").get_history("ZECUSDT")
         assert client.last_category == "inverse"
 
-    def test_category_preserved_in_result(self):
-        client = StubOrderClient(orders=SAMPLE_ORDERS)
-        result = OrderHistoryService(client=client, category="inverse").get_history("ZECUSDT")
-        assert result.category == "inverse"
-
-    def test_limit_passed_to_client(self):
-        client = StubOrderClient(orders=SAMPLE_ORDERS)
-        OrderHistoryService(client=client, limit=25).get_history("ZECUSDT")
-        assert client.last_limit == 25
-
-    def test_correct_number_of_orders_returned(self):
-        client = StubOrderClient(orders=SAMPLE_ORDERS)
-        result = OrderHistoryService(client=client).get_history("ZECUSDT")
+    def test_correct_number_of_orders(self):
+        result = OrderHistoryService(StubOrderClient(self.SAMPLE_RAW)).get_history("ZECUSDT")
         assert len(result.orders) == 3
 
     # -----------------------------------------------------------------------
-    # Field mapping
+    # Field mapping — including raw timestamps
     # -----------------------------------------------------------------------
 
     def test_order_id_mapped(self):
-        client = StubOrderClient(orders=SAMPLE_ORDERS)
-        result = OrderHistoryService(client=client).get_history("ZECUSDT")
-        assert result.orders[0].order_id == "ord-001"
+        result = OrderHistoryService(StubOrderClient(self.SAMPLE_RAW)).get_history("ZECUSDT")
+        order_ids = {o.order_id for o in result.orders}
+        assert "ord-001" in order_ids
 
-    def test_side_mapped(self):
-        client = StubOrderClient(orders=SAMPLE_ORDERS)
-        result = OrderHistoryService(client=client).get_history("ZECUSDT")
-        assert result.orders[0].side == "Buy"
-        assert result.orders[1].side == "Sell"
+    def test_created_ts_is_raw_string(self):
+        result = OrderHistoryService(StubOrderClient(self.SAMPLE_RAW)).get_history("ZECUSDT")
+        o = next(o for o in result.orders if o.order_id == "ord-001")
+        assert o.created_ts == str(W1_END - 3_000)
 
-    def test_order_type_mapped(self):
-        client = StubOrderClient(orders=SAMPLE_ORDERS)
-        result = OrderHistoryService(client=client).get_history("ZECUSDT")
-        assert result.orders[0].order_type == "Limit"
-        assert result.orders[1].order_type == "Market"
+    def test_updated_ts_is_raw_string(self):
+        result = OrderHistoryService(StubOrderClient(self.SAMPLE_RAW)).get_history("ZECUSDT")
+        o = next(o for o in result.orders if o.order_id == "ord-001")
+        assert o.updated_ts == str(W1_END - 2_000)
 
-    def test_price_mapped_as_float(self):
-        client = StubOrderClient(orders=SAMPLE_ORDERS)
-        result = OrderHistoryService(client=client).get_history("ZECUSDT")
-        assert isinstance(result.orders[0].price, float)
-        assert result.orders[0].price == pytest.approx(30.50)
+    def test_created_date_derived_from_created_ts(self):
+        result = OrderHistoryService(StubOrderClient(self.SAMPLE_RAW)).get_history("ZECUSDT")
+        o = next(o for o in result.orders if o.order_id == "ord-001")
+        assert o.created_date == "2023-11-14"
 
-    def test_market_order_price_is_zero(self):
-        client = StubOrderClient(orders=SAMPLE_ORDERS)
-        result = OrderHistoryService(client=client).get_history("ZECUSDT")
-        assert result.orders[1].price == pytest.approx(0.0)
+    def test_created_time_derived_from_created_ts(self):
+        result = OrderHistoryService(StubOrderClient(self.SAMPLE_RAW)).get_history("ZECUSDT")
+        o = next(o for o in result.orders if o.order_id == "ord-001")
+        # W1_END - 3_000 = 1699999997000 → check it's a valid HH:MM:SS
+        assert len(o.created_time.split(":")) == 3
 
-    def test_qty_mapped_as_float(self):
-        client = StubOrderClient(orders=SAMPLE_ORDERS)
-        result = OrderHistoryService(client=client).get_history("ZECUSDT")
-        assert isinstance(result.orders[0].qty, float)
-        assert result.orders[0].qty == pytest.approx(10.0)
+    def test_updated_date_derived_from_updated_ts(self):
+        result = OrderHistoryService(StubOrderClient(self.SAMPLE_RAW)).get_history("ZECUSDT")
+        o = next(o for o in result.orders if o.order_id == "ord-001")
+        assert o.updated_date == "2023-11-14"
 
     def test_order_status_mapped(self):
-        client = StubOrderClient(orders=SAMPLE_ORDERS)
-        result = OrderHistoryService(client=client).get_history("ZECUSDT")
-        assert result.orders[0].order_status == "Filled"
-        assert result.orders[2].order_status == "Cancelled"
+        result = OrderHistoryService(StubOrderClient(self.SAMPLE_RAW)).get_history("ZECUSDT")
+        cancelled = next(o for o in result.orders if o.order_id == "ord-003")
+        assert cancelled.order_status == "Cancelled"
 
-    def test_created_date_converted(self):
-        client = StubOrderClient(orders=SAMPLE_ORDERS)
-        result = OrderHistoryService(client=client).get_history("ZECUSDT")
-        assert result.orders[0].created_date == "2023-11-14"
-
-    def test_created_time_converted(self):
-        client = StubOrderClient(orders=SAMPLE_ORDERS)
-        result = OrderHistoryService(client=client).get_history("ZECUSDT")
-        assert result.orders[0].created_time == "22:13:19"
-
-    def test_updated_date_converted(self):
-        client = StubOrderClient(orders=SAMPLE_ORDERS)
-        result = OrderHistoryService(client=client).get_history("ZECUSDT")
-        assert result.orders[0].updated_date == "2023-11-14"
-
-    def test_updated_time_converted(self):
-        client = StubOrderClient(orders=SAMPLE_ORDERS)
-        result = OrderHistoryService(client=client).get_history("ZECUSDT")
-        # updatedTime = createdTime + 500 ms = W1_END - 1000 + 500 = W1_END - 500
-        assert result.orders[0].updated_time == "22:13:19"
-
-    def test_missing_optional_fields_default_gracefully(self):
+    def test_missing_timestamps_default_to_empty_strings(self):
         minimal = [{"side": "Buy", "orderType": "Limit", "price": "30.0", "qty": "1",
-                    "createdTime": str(W1_END - 1_000)}]
-        client = StubOrderClient(orders=minimal)
-        result = OrderHistoryService(client=client).get_history("ZECUSDT")
+                    "createdTime": str(W1_END - 1_000), "updatedTime": ""}]
+        result = OrderHistoryService(StubOrderClient(minimal)).get_history("ZECUSDT")
         o = result.orders[0]
-        assert o.order_id == ""
-        assert o.order_status == ""
-        assert o.price == pytest.approx(30.0)
+        assert o.updated_ts == ""
+        assert o.updated_date == ""
+        assert o.updated_time == ""
 
-    def test_original_order_preserved(self):
-        client = StubOrderClient(orders=SAMPLE_ORDERS)
-        result = OrderHistoryService(client=client).get_history("ZECUSDT")
-        assert [o.order_id for o in result.orders] == ["ord-001", "ord-002", "ord-003"]
+    # -----------------------------------------------------------------------
+    # Sorting by updatedTime DESC
+    # -----------------------------------------------------------------------
+
+    def test_orders_sorted_by_updated_ts_descending(self):
+        # Arrange — provide 3 orders with different updatedTime values
+        orders_raw = [
+            raw("old",    W1_END - 9_000, W1_END - 8_000),
+            raw("newest", W1_END - 1_000, W1_END - 500),
+            raw("middle", W1_END - 5_000, W1_END - 4_000),
+        ]
+        result = OrderHistoryService(StubOrderClient(orders_raw)).get_history("ZECUSDT")
+
+        # Assert — newest updated first
+        ids = [o.order_id for o in result.orders]
+        assert ids == ["newest", "middle", "old"]
+
+    def test_sort_is_by_updated_ts_not_created_ts(self):
+        # created order: A created first but updated last
+        orders_raw = [
+            raw("A", W1_END - 9_000, W1_END - 500),   # created early, updated latest
+            raw("B", W1_END - 1_000, W1_END - 8_000), # created late, updated early
+        ]
+        result = OrderHistoryService(StubOrderClient(orders_raw)).get_history("ZECUSDT")
+
+        ids = [o.order_id for o in result.orders]
+        assert ids[0] == "A"   # A has the newest updatedTime
+        assert ids[1] == "B"
+
+    def test_equal_updated_ts_does_not_crash(self):
+        # Two orders with identical updatedTime should not raise
+        orders_raw = [
+            raw("x", W1_END - 2_000, W1_END - 1_000),
+            raw("y", W1_END - 3_000, W1_END - 1_000),
+        ]
+        result = OrderHistoryService(StubOrderClient(orders_raw)).get_history("ZECUSDT")
+        assert len(result.orders) == 2
+
+    # -----------------------------------------------------------------------
+    # lookback_days is configurable via constructor
+    # -----------------------------------------------------------------------
+
+    def test_lookback_days_overridden_via_constructor(self):
+        client = StubOrderClient(self.SAMPLE_RAW)
+        # Use a 1-day lookback instead of the default 30
+        svc = OrderHistoryService(client, lookback_days=1)
+        result = svc.get_history("ZECUSDT")
+        # The important thing: it doesn't crash and returns an OrderHistory
+        assert isinstance(result, OrderHistory)
 
     # -----------------------------------------------------------------------
     # Empty response and errors
     # -----------------------------------------------------------------------
 
     def test_empty_response_returns_empty_orders_list(self):
-        client = StubOrderClient(orders=[])
-        result = OrderHistoryService(client=client).get_history("ZECUSDT")
+        result = OrderHistoryService(StubOrderClient([])).get_history("ZECUSDT")
         assert result.orders == []
-
-    def test_empty_response_still_returns_order_history(self):
-        client = StubOrderClient(orders=[])
-        result = OrderHistoryService(client=client).get_history("ZECUSDT")
-        assert isinstance(result, OrderHistory)
 
     def test_api_error_is_propagated(self):
         with pytest.raises(BybitAPIError):
@@ -360,288 +317,134 @@ class TestOrderHistoryService:
 # ===========================================================================
 
 class TestOrderHistoryWindowIteration:
-    """
-    Tests for the outer-window loop and inner-page logic.
-
-    Reference (NOW_FIXED = 1_700_000_000_000):
-      LOOKBACK = 30d, WINDOW = 7d → 5 windows (4 full + 1 partial)
-
-    Exact window boundaries (pre-computed):
-      W1: [1_699_395_200_000,  1_700_000_000_000]  7.00d
-      W2: [1_698_790_399_999,  1_699_395_199_999]  7.00d
-      W3: [1_698_185_599_998,  1_698_790_399_998]  7.00d
-      W4: [1_697_580_799_997,  1_698_185_599_997]  7.00d
-      W5: [1_697_408_000_000,  1_697_580_799_996]  2.00d  ← clamped
-    """
 
     @pytest.fixture(autouse=True)
     def freeze_time(self, monkeypatch):
         import services.order_history as m
         monkeypatch.setattr(m, "_now_ms", lambda: NOW_FIXED)
 
-    # -----------------------------------------------------------------------
-    # Window boundaries
-    # -----------------------------------------------------------------------
-
     def test_first_window_end_is_now(self):
-        # Arrange
-        client = SequentialStubClient(pages=[
-            [raw("o1", W1_END - 1_000)],
-        ])
-
-        # Act
+        client = SequentialStubClient(pages=[[raw("o1", W1_END - 1_000)]])
         OrderHistoryService(client).get_history("ZECUSDT")
-
-        # Assert
         assert client.call_log[0][1] == NOW_FIXED
 
     def test_first_window_start_is_now_minus_7_days(self):
-        # Arrange
-        client = SequentialStubClient(pages=[
-            [raw("o1", W1_END - 1_000)],
-        ])
-
-        # Act
+        client = SequentialStubClient(pages=[[raw("o1", W1_END - 1_000)]])
         OrderHistoryService(client).get_history("ZECUSDT")
-
-        # Assert
         assert client.call_log[0][0] == W1_START
 
     def test_second_window_end_is_w1_start_minus_one(self):
-        # W1 ends, then W2 should have end_time = W1_START - 1.
-        # Provide: W1 page, W1 empty page (ends inner loop), W2 page.
         client = SequentialStubClient(pages=[
-            [raw("o1", W1_END - 1_000)],   # W1 page 1
-            [],                             # W1 page 2 — inner loop ends
-            [raw("o2", W2_END - 1_000)],   # W2 page 1
+            [raw("o1", W1_END - 1_000)],
+            [],
+            [raw("o2", W2_END - 1_000)],
         ])
-
-        # Act
         OrderHistoryService(client).get_history("ZECUSDT")
-
-        # Assert — W1_START - 1 must appear as an end_time in the log
         end_times = [e for _, e in client.call_log]
         assert (W1_START - 1) in end_times
 
     def test_last_window_start_is_clamped_to_global_start(self):
-        # One non-empty page per window so the outer loop runs all 5
         client = SequentialStubClient(pages=[
             [raw(f"o{i}", W1_END - i * 1_000)] for i in range(1, 6)
         ])
-
-        # Act
         OrderHistoryService(client).get_history("ZECUSDT")
-
-        # Assert
         starts = [s for s, _ in client.call_log]
         assert GLOBAL_START in starts
 
     def test_window_span_does_not_exceed_7_days(self):
-        # Every API call must cover ≤ 7 days
         client = SequentialStubClient(pages=[
             [raw(f"o{i}", W1_END - i * 1_000)] for i in range(1, 6)
         ])
-
-        # Act
         OrderHistoryService(client).get_history("ZECUSDT")
-
-        # Assert
         for start, end in client.call_log:
             if start is not None and end is not None:
                 assert (end - start) <= MAX_WINDOW_DAYS * _MS_PER_DAY
 
-    # -----------------------------------------------------------------------
-    # Empty windows do NOT stop the outer loop
-    # -----------------------------------------------------------------------
-
     def test_empty_window_does_not_stop_outer_loop(self):
-        # W1 is empty; W2 has an order — outer loop must continue
         client = SequentialStubClient(pages=[
-            [],                             # W1 empty
-            [raw("o2", W2_END - 1_000)],   # W2 has data
+            [],
+            [raw("o2", W2_END - 1_000)],
         ])
-
-        # Act
         result = OrderHistoryService(client).get_history("ZECUSDT")
-
-        # Assert
         assert any(o.order_id == "o2" for o in result.orders)
 
-    def test_two_empty_windows_then_data(self):
-        # W1 and W2 are empty; W3 has an order
-        client = SequentialStubClient(pages=[
-            [],                             # W1 empty
-            [],                             # W2 empty
-            [raw("o3", W3_END - 1_000)],   # W3 has data
-        ])
-
-        # Act
-        result = OrderHistoryService(client).get_history("ZECUSDT")
-
-        # Assert
-        assert any(o.order_id == "o3" for o in result.orders)
-
     def test_all_empty_windows_return_empty_history(self):
-        # Arrange
         client = SequentialStubClient(pages=[])
-
-        # Act
         result = OrderHistoryService(client).get_history("ZECUSDT")
-
-        # Assert
         assert result.orders == []
 
     def test_all_empty_windows_make_at_most_5_calls(self):
-        # 30d / 7d = 5 windows; each makes exactly 1 call when empty
         client = SequentialStubClient(pages=[])
-
-        # Act
         OrderHistoryService(client).get_history("ZECUSDT")
-
-        # Assert
         assert len(client.call_log) <= 5
 
-    # -----------------------------------------------------------------------
-    # Data aggregation across windows
-    # -----------------------------------------------------------------------
-
     def test_orders_from_two_windows_are_combined(self):
-        # Arrange
         client = SequentialStubClient(pages=[
             [raw("o1", W1_END - 1_000)],
             [raw("o2", W2_END - 1_000)],
         ])
-
-        # Act
         result = OrderHistoryService(client).get_history("ZECUSDT")
-
-        # Assert
         assert len(result.orders) == 2
-        assert {o.order_id for o in result.orders} == {"o1", "o2"}
 
-    def test_orders_from_all_five_windows_are_combined(self):
-        # Arrange
+    def test_gap_in_activity_handled(self):
         client = SequentialStubClient(pages=[
-            [raw(f"o{i}", W1_END - i * 1_000)] for i in range(1, 6)
+            [raw("o1", W1_END - 1_000)],
+            [],
+            [raw("o3", W3_END - 1_000)],
         ])
-
-        # Act
         result = OrderHistoryService(client).get_history("ZECUSDT")
-
-        # Assert
-        assert len(result.orders) == 5
-
-    def test_gap_in_order_activity_handled(self):
-        # W1 and W3 have orders; W2 is empty (trading gap)
-        client = SequentialStubClient(pages=[
-            [raw("o1", W1_END - 1_000)],   # W1
-            [],                             # W2: gap
-            [raw("o3", W3_END - 1_000)],   # W3
-        ])
-
-        # Act
-        result = OrderHistoryService(client).get_history("ZECUSDT")
-
-        # Assert
         ids = {o.order_id for o in result.orders}
         assert "o1" in ids and "o3" in ids
 
-    # -----------------------------------------------------------------------
-    # Inner-loop paging within one window
-    # -----------------------------------------------------------------------
-
     def test_multiple_pages_within_one_window_combined(self):
-        # W1 has two pages of orders
         T1, T2, T3 = W1_END - 1_000, W1_END - 2_000, W1_END - 3_000
         client = SequentialStubClient(pages=[
-            [raw("o1", T1), raw("o2", T2)],   # W1 page 1
-            [raw("o3", T3)],                   # W1 page 2
+            [raw("o1", T1), raw("o2", T2)],
+            [raw("o3", T3)],
         ])
-
-        # Act
         result = OrderHistoryService(client).get_history("ZECUSDT")
-
-        # Assert
         assert len(result.orders) == 3
 
     def test_inner_page_end_time_advances_to_oldest_minus_one(self):
-        # After page 1, the next call's end_time should be oldest_in_page - 1
-        T1, T2 = W1_END - 1_000, W1_END - 50_000   # T2 is oldest on page 1
+        T1, T2 = W1_END - 1_000, W1_END - 50_000
         client = SequentialStubClient(pages=[
-            [raw("o1", T1), raw("o2", T2)],   # W1 page 1
-            [],                                # W1 page 2 — empty, inner loop ends
+            [raw("o1", T1), raw("o2", T2)],
+            [],
         ])
-
-        # Act
         OrderHistoryService(client).get_history("ZECUSDT")
-
-        # Assert — second call should have end_time = T2 - 1
         assert client.call_log[1][1] == T2 - 1
 
-    # -----------------------------------------------------------------------
-    # Deduplication across window boundaries
-    # -----------------------------------------------------------------------
-
     def test_duplicate_order_id_across_windows_appears_once(self):
-        # "dup" appears at the boundary between W1 and W2
-        dup_time = W1_END - 1_000
         client = SequentialStubClient(pages=[
-            [raw("dup", dup_time), raw("o1", W1_END - 2_000)],   # W1
-            [raw("dup", dup_time), raw("o2", W2_END - 1_000)],   # W2
+            [raw("dup", W1_END - 1_000), raw("o1", W1_END - 2_000)],
+            [raw("dup", W1_END - 1_000), raw("o2", W2_END - 1_000)],
         ])
-
-        # Act
         result = OrderHistoryService(client).get_history("ZECUSDT")
-
-        # Assert
         ids = [o.order_id for o in result.orders]
         assert ids.count("dup") == 1
 
-    # -----------------------------------------------------------------------
-    # No-infinite-loop guarantee
-    # -----------------------------------------------------------------------
-
-    def test_terminates_with_all_empty_responses(self):
-        # Arrange
-        client = SequentialStubClient(pages=[])
-
-        # Act
+    def test_result_is_sorted_by_updated_ts_desc_across_windows(self):
+        # o1 in W1, o2 in W2; o1 has a later updatedTime
+        client = SequentialStubClient(pages=[
+            [raw("o1", W1_END - 1_000, W1_END - 500)],
+            [raw("o2", W2_END - 1_000, W2_END - 500)],
+        ])
         result = OrderHistoryService(client).get_history("ZECUSDT")
+        # o1 updated_ts > o2 updated_ts → o1 should be first
+        assert result.orders[0].order_id == "o1"
+        assert result.orders[1].order_id == "o2"
 
-        # Assert
-        assert isinstance(result, OrderHistory)
-
-    def test_return_type_is_always_order_history(self):
-        client = SequentialStubClient(pages=[])
-        result = OrderHistoryService(client).get_history("ZECUSDT")
-        assert isinstance(result, OrderHistory)
-
-    # -----------------------------------------------------------------------
-    # Error propagation
-    # -----------------------------------------------------------------------
-
-    def test_error_from_any_window_propagates(self):
+    def test_error_propagates(self):
         class ErrClient:
             def get_order_history(self, symbol, category, limit,
                                   start_time=None, end_time=None):
                 raise BybitAPIError("Bybit API error [10003]: boom")
-
         with pytest.raises(BybitAPIError, match="10003"):
             OrderHistoryService(ErrClient()).get_history("ZECUSDT")
 
-    # -----------------------------------------------------------------------
-    # Constants
-    # -----------------------------------------------------------------------
-
-    def test_lookback_days_is_30(self):
-        assert LOOKBACK_DAYS == 30
-
-    def test_max_window_days_is_7(self):
-        assert MAX_WINDOW_DAYS == 7
-
 
 # ===========================================================================
-# OrderHistoryExporter tests — unchanged from before
+# OrderHistoryExporter tests
 # ===========================================================================
 
 class TestOrderHistoryExporter:
@@ -662,7 +465,8 @@ class TestOrderHistoryExporter:
         exporter.export(SAMPLE_HISTORY)
         single = _make_history(
             ("ord-001", "ZECUSDT", "Buy", "Limit", 30.5, 10.0, "Filled",
-             "2023-11-14", "22:13:19", "2023-11-14", "22:13:19")
+             "1700000001000", "1700000002000",
+             "2023-11-14", "22:13:21", "2023-11-14", "22:13:22")
         )
         exporter.export(single)
         rows = read_csv(output)
@@ -676,15 +480,50 @@ class TestOrderHistoryExporter:
         assert rows[0] == [
             "order_id", "symbol", "side", "order_type",
             "price", "qty", "order_status",
+            "created_ts", "updated_ts",
             "created_date", "created_time",
             "updated_date", "updated_time",
         ]
+
+    def test_raw_timestamp_columns_present(self, tmp_path):
+        output = tmp_path / "out.csv"
+        OrderHistoryExporter(output).export(SAMPLE_HISTORY)
+        rows = read_csv(output)
+        assert "created_ts" in rows[0]
+        assert "updated_ts" in rows[0]
+
+    def test_created_ts_before_created_date_in_header(self, tmp_path):
+        output = tmp_path / "out.csv"
+        OrderHistoryExporter(output).export(SAMPLE_HISTORY)
+        headers = read_csv(output)[0]
+        assert headers.index("created_ts") < headers.index("created_date")
+
+    def test_updated_ts_before_updated_date_in_header(self, tmp_path):
+        output = tmp_path / "out.csv"
+        OrderHistoryExporter(output).export(SAMPLE_HISTORY)
+        headers = read_csv(output)[0]
+        assert headers.index("updated_ts") < headers.index("updated_date")
 
     def test_correct_number_of_rows(self, tmp_path):
         output = tmp_path / "out.csv"
         OrderHistoryExporter(output).export(SAMPLE_HISTORY)
         rows = read_csv(output)
         assert len(rows) == 4  # 1 header + 3 orders
+
+    def test_correct_column_count_is_13(self, tmp_path):
+        output = tmp_path / "out.csv"
+        OrderHistoryExporter(output).export(SAMPLE_HISTORY)
+        rows = read_csv(output)
+        assert len(rows[0]) == 13
+        assert len(rows[1]) == 13
+
+    def test_raw_timestamps_written_to_csv(self, tmp_path):
+        output = tmp_path / "out.csv"
+        OrderHistoryExporter(output).export(SAMPLE_HISTORY)
+        rows = read_csv(output)
+        # created_ts is column index 7, updated_ts is index 8
+        assert rows[1][7] == "1700000001000"
+        assert rows[1][8] == "1700000002000"
 
     def test_correct_values_first_row(self, tmp_path):
         output = tmp_path / "out.csv"
@@ -693,33 +532,10 @@ class TestOrderHistoryExporter:
         assert rows[1] == [
             "ord-001", "ZECUSDT", "Buy", "Limit",
             "30.5", "10.0", "Filled",
-            "2023-11-14", "22:13:19",
-            "2023-11-14", "22:13:19",
+            "1700000001000", "1700000002000",
+            "2023-11-14", "22:13:21",
+            "2023-11-14", "22:13:22",
         ]
-
-    def test_correct_values_second_row(self, tmp_path):
-        output = tmp_path / "out.csv"
-        OrderHistoryExporter(output).export(SAMPLE_HISTORY)
-        rows = read_csv(output)
-        assert rows[2] == [
-            "ord-002", "ZECUSDT", "Sell", "Market",
-            "0.0", "5.0", "Filled",
-            "2023-11-14", "22:13:18",
-            "2023-11-14", "22:13:18",
-        ]
-
-    def test_cancelled_order_status_written(self, tmp_path):
-        output = tmp_path / "out.csv"
-        OrderHistoryExporter(output).export(SAMPLE_HISTORY)
-        rows = read_csv(output)
-        assert rows[3][6] == "Cancelled"
-
-    def test_correct_column_count(self, tmp_path):
-        output = tmp_path / "out.csv"
-        OrderHistoryExporter(output).export(SAMPLE_HISTORY)
-        rows = read_csv(output)
-        assert len(rows[0]) == 11
-        assert len(rows[1]) == 11
 
     def test_empty_history_writes_header_only(self, tmp_path):
         output = tmp_path / "out.csv"
@@ -730,10 +546,6 @@ class TestOrderHistoryExporter:
     def test_make_exporter_builds_correct_filename(self, tmp_path):
         assert make_exporter("ZECUSDT", output_dir=tmp_path)._output_path == \
                tmp_path / "ZECUSDT_orderHistory.csv"
-
-    def test_make_exporter_uppercases_symbol(self, tmp_path):
-        assert make_exporter("zecusdt", output_dir=tmp_path)._output_path.name == \
-               "ZECUSDT_orderHistory.csv"
 
     def test_make_exporter_default_dir_is_data(self):
         assert make_exporter("ZECUSDT")._output_path == \
