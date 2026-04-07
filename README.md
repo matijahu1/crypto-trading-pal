@@ -56,7 +56,7 @@ Create a directory named `/data` in the project root. This folder will store you
 > [!NOTE]
 > These actions are currently functional but are considered "in-progress." Feel free to test which data exports work best for your needs and provide feedback via GitHub Issues.
 
-3. **Environment Secrets:**
+### 3. Environment Secrets
 1. Copy the `.env.example` file from the root directory to a new file named `.env`.
 2. Open the `.env` file and enter your Bybit API Key and Secret.
 Note: Never commit your .env file to version control.
