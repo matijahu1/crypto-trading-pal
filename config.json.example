@@ -15,5 +15,8 @@
             "export_order_history",
             "export_executions"
         ]
+    },
+    "request_settings": {
+        "symbol": "BTCUSDT"
     }
 }

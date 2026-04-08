@@ -82,12 +82,25 @@ class ActionsConfig:
 
 
 @dataclass
+class RequestSettingsConfig:
+    """Symbol-level settings used by the symbol-specific batch exports."""
+
+    symbol: str = "BTCUSDT"
+    """
+    The trading pair symbol passed to trade history, order history, and
+    executions exports.  Must match a valid Bybit linear contract symbol,
+    e.g. "BTCUSDT", "ETHUSDT", "ICPUSDT".
+    """
+
+
+@dataclass
 class AppConfig:
     """Typed representation of config.json."""
 
-    logging: LoggingConfig = field(default_factory=LoggingConfig)
-    paths:   PathsConfig   = field(default_factory=PathsConfig)
-    actions: ActionsConfig = field(default_factory=ActionsConfig)
+    logging:          LoggingConfig         = field(default_factory=LoggingConfig)
+    paths:            PathsConfig           = field(default_factory=PathsConfig)
+    actions:          ActionsConfig         = field(default_factory=ActionsConfig)
+    request_settings: RequestSettingsConfig = field(default_factory=RequestSettingsConfig)
 
     @property
     def log_file_path(self) -> pathlib.Path:
@@ -98,6 +111,11 @@ class AppConfig:
     def enabled_actions(self) -> list[str]:
         """Convenience accessor — the ordered list of actions to execute."""
         return self.actions.enabled
+
+    @property
+    def symbol(self) -> str:
+        """Convenience accessor — the trading pair symbol from request_settings."""
+        return self.request_settings.symbol
 
 
 # ---------------------------------------------------------------------------
@@ -152,9 +170,10 @@ def load_config(config_path: pathlib.Path = CONFIG_PATH) -> AppConfig:
 def _parse(data: dict, config_path: pathlib.Path) -> AppConfig:
     """Validate types and build the AppConfig from the raw dict."""
     try:
-        log_raw     = data.get("logging", {})
-        paths_raw   = data.get("paths",   {})
-        actions_raw = data.get("actions", {})
+        log_raw              = data.get("logging",          {})
+        paths_raw            = data.get("paths",            {})
+        actions_raw          = data.get("actions",          {})
+        request_settings_raw = data.get("request_settings", {})
 
         if not isinstance(log_raw, dict):
             raise ConfigError(f"'logging' must be an object in {config_path}")
@@ -162,23 +181,31 @@ def _parse(data: dict, config_path: pathlib.Path) -> AppConfig:
             raise ConfigError(f"'paths' must be an object in {config_path}")
         if not isinstance(actions_raw, dict):
             raise ConfigError(f"'actions' must be an object in {config_path}")
+        if not isinstance(request_settings_raw, dict):
+            raise ConfigError(f"'request_settings' must be an object in {config_path}")
 
-        logging_cfg = LoggingConfig(
+        logging_cfg          = LoggingConfig(
             enabled=bool(log_raw.get("enabled",     True)),
             level=str(log_raw.get("level",          "INFO")).upper(),
             log_to_file=bool(log_raw.get("log_to_file", False)),
         )
-        paths_cfg = PathsConfig(
+        paths_cfg            = PathsConfig(
             log_file=str(paths_raw.get("log_file", "bybit_bot.log")),
         )
-        actions_cfg = _parse_actions(actions_raw, config_path)
+        actions_cfg          = _parse_actions(actions_raw, config_path)
+        request_settings_cfg = _parse_request_settings(request_settings_raw, config_path)
 
     except (TypeError, ValueError) as exc:
         raise ConfigError(
             f"Invalid value in {config_path}: {exc}"
         ) from exc
 
-    return AppConfig(logging=logging_cfg, paths=paths_cfg, actions=actions_cfg)
+    return AppConfig(
+        logging=logging_cfg,
+        paths=paths_cfg,
+        actions=actions_cfg,
+        request_settings=request_settings_cfg,
+    )
 
 
 def _parse_actions(actions_raw: dict, config_path: pathlib.Path) -> ActionsConfig:
@@ -212,6 +239,30 @@ def _parse_actions(actions_raw: dict, config_path: pathlib.Path) -> ActionsConfi
     return ActionsConfig(enabled=enabled)
 
 
+def _parse_request_settings(
+    request_settings_raw: dict, config_path: pathlib.Path
+) -> RequestSettingsConfig:
+    """
+    Parse and validate the 'request_settings' block.
+
+    The 'symbol' key must be a non-empty string when present.
+    Falls back to "BTCUSDT" if the block or key is absent.
+    """
+    symbol = request_settings_raw.get("symbol", "BTCUSDT")
+
+    if not isinstance(symbol, str):
+        raise ConfigError(
+            f"'request_settings.symbol' must be a string in {config_path}, "
+            f"got {type(symbol).__name__!r}"
+        )
+    if not symbol.strip():
+        raise ConfigError(
+            f"'request_settings.symbol' must not be empty in {config_path}"
+        )
+
+    return RequestSettingsConfig(symbol=symbol.strip())
+
+
 def _write_template(config_path: pathlib.Path) -> None:
     """Write a starter template so the user knows what to configure."""
     template = {
@@ -225,6 +276,9 @@ def _write_template(config_path: pathlib.Path) -> None:
         },
         "actions": {
             "enabled": list(ALL_ACTIONS),
+        },
+        "request_settings": {
+            "symbol": "BTCUSDT",
         },
     }
     config_path.write_text(
