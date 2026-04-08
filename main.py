@@ -4,11 +4,15 @@ main.py — batch entry point.
 Which exports run is controlled by the "actions.enabled" list in
 data/config.json.  Comment out or remove any action name to skip that step.
 
+The symbol used for trade history, order history, and executions exports is
+read from "request_settings.symbol" in data/config.json.
+
 Available action names:
   "export_balances"          → data/balance.csv
   "export_futures_positions" → data/futures_positions.csv
-  "export_trade_history"     → data/ZECUSDT_tradeHistory.csv
-  "export_order_history"     → data/ZECUSDT_orderHistory.csv
+  "export_trade_history"     → data/<symbol>_tradeHistory.csv
+  "export_order_history"     → data/<symbol>_orderHistory.csv
+  "export_executions"        → data/<symbol>_executions.csv
 
 Run:
     python main.py
@@ -77,7 +81,7 @@ def main() -> None:
     log.debug("BybitClient initialised (testnet=%s)", testnet)
 
     # 5. Dispatch — run only the actions listed in config
-    _dispatch(client, config.enabled_actions)
+    _dispatch(client, config.enabled_actions, config.symbol)
 
     log.info("Batch export run complete")
 
@@ -86,7 +90,7 @@ def main() -> None:
 # Action registry — maps each config action name to its implementation
 # ---------------------------------------------------------------------------
 
-def _build_registry(client: BybitClient) -> dict[str, Callable[[], None]]:
+def _build_registry(client: BybitClient, symbol: str) -> dict[str, Callable[[], None]]:
     """
     Return a dict mapping every known action name to a zero-argument callable.
 
@@ -98,13 +102,13 @@ def _build_registry(client: BybitClient) -> dict[str, Callable[[], None]]:
     return {
         "export_balances":          lambda: _export_balances(client),
         "export_futures_positions": lambda: _export_futures_positions(client),
-        "export_trade_history":     lambda: _export_trade_history(client),
-        "export_order_history":     lambda: _export_order_history(client),
-        "export_executions":        lambda: _export_executions(client),
+        "export_trade_history":     lambda: _export_trade_history(client, symbol),
+        "export_order_history":     lambda: _export_order_history(client, symbol),
+        "export_executions":        lambda: _export_executions(client, symbol),
     }
 
 
-def _dispatch(client: BybitClient, enabled_actions: list[str]) -> None:
+def _dispatch(client: BybitClient, enabled_actions: list[str], symbol: str) -> None:
     """
     Run each action in *enabled_actions* in order.
 
@@ -115,7 +119,7 @@ def _dispatch(client: BybitClient, enabled_actions: list[str]) -> None:
         log.warning("No actions are enabled in config.json — nothing to do")
         return
 
-    registry = _build_registry(client)
+    registry = _build_registry(client, symbol)
 
     for action in enabled_actions:
         log.debug("Running action: %s", action)
@@ -175,81 +179,63 @@ def _export_futures_positions(client: BybitClient) -> None:
         )
 
 
-def _export_trade_history(client: BybitClient) -> None:
+def _export_trade_history(client: BybitClient, symbol: str) -> None:
     """Fetch trade history for a single contract and write its CSV."""
-    # -----------------------------------------------------------------------
-    # Change SYMBOL here to export a different contract.
-    # -----------------------------------------------------------------------
-    SYMBOL = "ICPUSDT"
-    # -----------------------------------------------------------------------
-
-    log.info("Fetching trade history for %s...", SYMBOL)
+    log.info("Fetching trade history for %s...", symbol)
 
     service  = TradeHistoryService(client=client, category="linear")
-    exporter = make_trade_exporter(SYMBOL)
+    exporter = make_trade_exporter(symbol)
 
     try:
-        history = service.get_history(SYMBOL)
+        history = service.get_history(symbol)
     except BybitAPIError as exc:
         log.error("Could not fetch trade history: %s", exc)
         return
 
     if not history.trades:
-        log.warning("No trade history found for %s — CSV was not written", SYMBOL)
+        log.warning("No trade history found for %s — CSV was not written", symbol)
         return
 
     path = exporter.export(history)
     log.info("Exported %d trade(s) to %s", len(history.trades), path)
 
 
-def _export_order_history(client: BybitClient) -> None:
+def _export_order_history(client: BybitClient, symbol: str) -> None:
     """Fetch order history for a single contract and write its CSV."""
-    # -----------------------------------------------------------------------
-    # Change SYMBOL here to export a different contract.
-    # -----------------------------------------------------------------------
-    SYMBOL = "ZROUSDT"
-    # -----------------------------------------------------------------------
-
-    log.info("Fetching order history for %s...", SYMBOL)
+    log.info("Fetching order history for %s...", symbol)
 
     service  = OrderHistoryService(client=client, category="linear")
-    exporter = make_order_exporter(SYMBOL)
+    exporter = make_order_exporter(symbol)
 
     try:
-        history = service.get_history(SYMBOL)
+        history = service.get_history(symbol)
     except BybitAPIError as exc:
         log.error("Could not fetch order history: %s", exc)
         return
 
     if not history.orders:
-        log.warning("No order history found for %s — CSV was not written", SYMBOL)
+        log.warning("No order history found for %s — CSV was not written", symbol)
         return
 
     path = exporter.export(history)
     log.info("Exported %d order(s) to %s", len(history.orders), path)
 
 
-def _export_executions(client: BybitClient) -> None:
+def _export_executions(client: BybitClient, symbol: str) -> None:
     """Fetch execution history for a single contract and write its CSV."""
-    # -----------------------------------------------------------------------
-    # Change SYMBOL here to export a different contract.
-    # -----------------------------------------------------------------------
-    SYMBOL = "ZECUSDT"
-    # -----------------------------------------------------------------------
-
-    log.info("Fetching executions for %s...", SYMBOL)
+    log.info("Fetching executions for %s...", symbol)
 
     service  = ExecutionsService(client=client, category="linear")
-    exporter = make_executions_exporter(SYMBOL)
+    exporter = make_executions_exporter(symbol)
 
     try:
-        history = service.get_executions(SYMBOL)
+        history = service.get_executions(symbol)
     except BybitAPIError as exc:
         log.error("Could not fetch executions: %s", exc)
         return
 
     if not history.executions:
-        log.warning("No executions found for %s — CSV was not written", SYMBOL)
+        log.warning("No executions found for %s — CSV was not written", symbol)
         return
 
     path = exporter.export(history)
