@@ -374,8 +374,10 @@ class TestOrderHistoryWindowIteration:
         assert result.orders == []
 
     def test_all_empty_windows_make_at_most_5_calls(self):
+        # 30d / 7d-per-window = 5 windows; pin lookback so the assertion
+        # stays correct regardless of the LOOKBACK_DAYS module constant.
         client = SequentialStubClient(pages=[])
-        OrderHistoryService(client).get_history("ZECUSDT")
+        OrderHistoryService(client).get_history("ZECUSDT", lookback_days=30)
         assert len(client.call_log) <= 5
 
     def test_orders_from_two_windows_are_combined(self):
