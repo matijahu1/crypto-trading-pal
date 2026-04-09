@@ -24,12 +24,6 @@ log = logging.getLogger(__name__)
 # Time-window constants
 # ---------------------------------------------------------------------------
 
-LOOKBACK_DAYS = 30
-"""
-Total number of calendar days of trade history to fetch.
-Change this value to widen or narrow the lookback period.
-"""
-
 MAX_WINDOW_DAYS = 7
 """
 Maximum days per single API request.
@@ -38,6 +32,16 @@ Do not change this value.
 """
 
 _MS_PER_DAY = 24 * 60 * 60 * 1_000
+
+# Fallback used only when no config value is injected (e.g. in isolated unit
+# tests that construct the service without passing lookback_days).
+# Production code always supplies the value from AppConfig.lookback_days_default.
+_LOOKBACK_DAYS_FALLBACK = 30
+
+# Public alias preserved for test imports:
+#   from services.trade_history import LOOKBACK_DAYS
+# Tests that need a stable value should pass lookback_days=30 explicitly.
+LOOKBACK_DAYS = _LOOKBACK_DAYS_FALLBACK
 
 
 # ---------------------------------------------------------------------------
@@ -124,7 +128,7 @@ class TradeHistoryService:
         client: TradeHistoryClientProtocol,
         category: str = "linear",
         limit: int = 100,
-        lookback_days: int = LOOKBACK_DAYS,
+        lookback_days: int = _LOOKBACK_DAYS_FALLBACK,
     ) -> None:
         """
         Args:
@@ -132,6 +136,10 @@ class TradeHistoryService:
             category:      Bybit instrument category ("linear" or "inverse").
             limit:         Max records per API call (Bybit maximum: 100).
             lookback_days: Default number of calendar days to look back.
+                           In production this is supplied from
+                           AppConfig.lookback_days_default; the module-level
+                           fallback (30) is used only in tests that do not
+                           inject a config value.
         """
         self._client = client
         self._category = category

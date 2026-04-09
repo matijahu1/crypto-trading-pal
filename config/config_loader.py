@@ -92,6 +92,14 @@ class RequestSettingsConfig:
     e.g. "BTCUSDT", "ETHUSDT", "ICPUSDT".
     """
 
+    lookback_days_default: int = 30
+    """
+    Default number of calendar days of history to fetch for trade history,
+    order history, and executions exports.  Can be overridden per-call via
+    the lookback_days or start_time_ms arguments on get_history().
+    Must be a positive integer.
+    """
+
 
 @dataclass
 class AppConfig:
@@ -116,6 +124,11 @@ class AppConfig:
     def symbol(self) -> str:
         """Convenience accessor — the trading pair symbol from request_settings."""
         return self.request_settings.symbol
+
+    @property
+    def lookback_days_default(self) -> int:
+        """Convenience accessor — default history lookback from request_settings."""
+        return self.request_settings.lookback_days_default
 
 
 # ---------------------------------------------------------------------------
@@ -247,6 +260,9 @@ def _parse_request_settings(
 
     The 'symbol' key must be a non-empty string when present.
     Falls back to "BTCUSDT" if the block or key is absent.
+
+    The 'lookback_days_default' key must be a positive integer when present.
+    Falls back to 30 if absent.
     """
     symbol = request_settings_raw.get("symbol", "BTCUSDT")
 
@@ -260,7 +276,23 @@ def _parse_request_settings(
             f"'request_settings.symbol' must not be empty in {config_path}"
         )
 
-    return RequestSettingsConfig(symbol=symbol.strip())
+    lookback_days_default = request_settings_raw.get("lookback_days_default", 30)
+
+    if not isinstance(lookback_days_default, int) or isinstance(lookback_days_default, bool):
+        raise ConfigError(
+            f"'request_settings.lookback_days_default' must be an integer in "
+            f"{config_path}, got {type(lookback_days_default).__name__!r}"
+        )
+    if lookback_days_default < 1:
+        raise ConfigError(
+            f"'request_settings.lookback_days_default' must be a positive integer "
+            f"in {config_path}, got {lookback_days_default!r}"
+        )
+
+    return RequestSettingsConfig(
+        symbol=symbol.strip(),
+        lookback_days_default=lookback_days_default,
+    )
 
 
 def _write_template(config_path: pathlib.Path) -> None:
@@ -279,6 +311,7 @@ def _write_template(config_path: pathlib.Path) -> None:
         },
         "request_settings": {
             "symbol": "BTCUSDT",
+            "lookback_days_default": 30,
         },
     }
     config_path.write_text(

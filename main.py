@@ -81,7 +81,7 @@ def main() -> None:
     log.debug("BybitClient initialised (testnet=%s)", testnet)
 
     # 5. Dispatch — run only the actions listed in config
-    _dispatch(client, config.enabled_actions, config.symbol)
+    _dispatch(client, config.enabled_actions, config.symbol, config.lookback_days_default)
 
     log.info("Batch export run complete")
 
@@ -90,7 +90,9 @@ def main() -> None:
 # Action registry — maps each config action name to its implementation
 # ---------------------------------------------------------------------------
 
-def _build_registry(client: BybitClient, symbol: str) -> dict[str, Callable[[], None]]:
+def _build_registry(
+    client: BybitClient, symbol: str, lookback_days: int
+) -> dict[str, Callable[[], None]]:
     """
     Return a dict mapping every known action name to a zero-argument callable.
 
@@ -102,13 +104,18 @@ def _build_registry(client: BybitClient, symbol: str) -> dict[str, Callable[[], 
     return {
         "export_balances":          lambda: _export_balances(client),
         "export_futures_positions": lambda: _export_futures_positions(client),
-        "export_trade_history":     lambda: _export_trade_history(client, symbol),
-        "export_order_history":     lambda: _export_order_history(client, symbol),
-        "export_executions":        lambda: _export_executions(client, symbol),
+        "export_trade_history":     lambda: _export_trade_history(client, symbol, lookback_days),
+        "export_order_history":     lambda: _export_order_history(client, symbol, lookback_days),
+        "export_executions":        lambda: _export_executions(client, symbol, lookback_days),
     }
 
 
-def _dispatch(client: BybitClient, enabled_actions: list[str], symbol: str) -> None:
+def _dispatch(
+    client: BybitClient,
+    enabled_actions: list[str],
+    symbol: str,
+    lookback_days: int,
+) -> None:
     """
     Run each action in *enabled_actions* in order.
 
@@ -119,7 +126,7 @@ def _dispatch(client: BybitClient, enabled_actions: list[str], symbol: str) -> N
         log.warning("No actions are enabled in config.json — nothing to do")
         return
 
-    registry = _build_registry(client, symbol)
+    registry = _build_registry(client, symbol, lookback_days)
 
     for action in enabled_actions:
         log.debug("Running action: %s", action)
@@ -179,11 +186,11 @@ def _export_futures_positions(client: BybitClient) -> None:
         )
 
 
-def _export_trade_history(client: BybitClient, symbol: str) -> None:
+def _export_trade_history(client: BybitClient, symbol: str, lookback_days: int) -> None:
     """Fetch trade history for a single contract and write its CSV."""
     log.info("Fetching trade history for %s...", symbol)
 
-    service  = TradeHistoryService(client=client, category="linear")
+    service  = TradeHistoryService(client=client, category="linear", lookback_days=lookback_days)
     exporter = make_trade_exporter(symbol)
 
     try:
@@ -200,11 +207,11 @@ def _export_trade_history(client: BybitClient, symbol: str) -> None:
     log.info("Exported %d trade(s) to %s", len(history.trades), path)
 
 
-def _export_order_history(client: BybitClient, symbol: str) -> None:
+def _export_order_history(client: BybitClient, symbol: str, lookback_days: int) -> None:
     """Fetch order history for a single contract and write its CSV."""
     log.info("Fetching order history for %s...", symbol)
 
-    service  = OrderHistoryService(client=client, category="linear")
+    service  = OrderHistoryService(client=client, category="linear", lookback_days=lookback_days)
     exporter = make_order_exporter(symbol)
 
     try:
@@ -221,10 +228,11 @@ def _export_order_history(client: BybitClient, symbol: str) -> None:
     log.info("Exported %d order(s) to %s", len(history.orders), path)
 
 
-def _export_executions(client: BybitClient, symbol: str) -> None:
+def _export_executions(client: BybitClient, symbol: str, lookback_days: int) -> None:
     """Fetch execution history for a single contract and write its CSV."""
     log.info("Fetching executions for %s...", symbol)
 
+    # TODO: pass lookback_days once ExecutionsService gains a lookback_days param.
     service  = ExecutionsService(client=client, category="linear")
     exporter = make_executions_exporter(symbol)
 
