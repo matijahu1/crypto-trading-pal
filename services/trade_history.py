@@ -95,10 +95,10 @@ class TradeHistoryService:
     Time-window strategy
     --------------------
     Bybit limits each request to a 7-day window (startTime..endTime).
-    To cover the full LOOKBACK_DAYS period we divide it into fixed 7-day
+    To cover the full lookback period we divide it into fixed 7-day
     slices and iterate backwards from now:
 
-        global_start = now - LOOKBACK_DAYS
+        global_start = now - lookback_days
         end_time     = now
 
         while end_time > global_start:
@@ -124,24 +124,41 @@ class TradeHistoryService:
         client: TradeHistoryClientProtocol,
         category: str = "linear",
         limit: int = 100,
+        lookback_days: int = LOOKBACK_DAYS,
     ) -> None:
         """
         Args:
-            client:   API client satisfying TradeHistoryClientProtocol.
-            category: Bybit instrument category ("linear" or "inverse").
-            limit:    Max records per API call (Bybit maximum: 100).
+            client:        API client satisfying TradeHistoryClientProtocol.
+            category:      Bybit instrument category ("linear" or "inverse").
+            limit:         Max records per API call (Bybit maximum: 100).
+            lookback_days: Default number of calendar days to look back.
         """
         self._client = client
         self._category = category
         self._limit = limit
+        self._lookback_days = lookback_days
 
-    def get_history(self, symbol: str) -> TradeHistory:
+    def get_history(
+        self,
+        symbol: str,
+        lookback_days: int | None = None,
+        start_time_ms: int | None = None,
+    ) -> TradeHistory:
         """
-        Return all trade executions for *symbol* within the last LOOKBACK_DAYS.
+        Return all trade executions for *symbol* within the requested range.
 
         Args:
-            symbol: Perpetual futures symbol, e.g. "ZECUSDT".
-                    Uppercase is enforced automatically.
+            symbol:        Perpetual futures symbol, e.g. "ZECUSDT".
+                           Uppercase is enforced automatically.
+            lookback_days: If provided, overrides the instance-level default.
+                           Ignored when start_time_ms is set.
+            start_time_ms: Explicit UTC millisecond timestamp for the start of
+                           the fetch window.  Takes priority over lookback_days.
+
+        Parameter priority for global_start:
+            1. start_time_ms  — used directly when provided.
+            2. lookback_days  — applied from now when provided.
+            3. self._lookback_days — the constructor default.
 
         Returns:
             TradeHistory dataclass. Trades are accumulated newest-first.
@@ -152,14 +169,19 @@ class TradeHistoryService:
         """
         symbol = symbol.upper()
 
-        now_ms       = _now_ms()
-        global_start = now_ms - LOOKBACK_DAYS * _MS_PER_DAY
-        end_time     = now_ms
+        now_ms   = _now_ms()
+        end_time = now_ms
+
+        if start_time_ms is not None:
+            global_start = start_time_ms
+        elif lookback_days is not None:
+            global_start = now_ms - lookback_days * _MS_PER_DAY
+        else:
+            global_start = now_ms - self._lookback_days * _MS_PER_DAY
 
         log.debug(
-            "Trade history fetch started: symbol=%s lookback=%dd "
-            "global_start=%d now=%d",
-            symbol, LOOKBACK_DAYS, global_start, now_ms,
+            "Trade history fetch started: symbol=%s global_start=%d now=%d",
+            symbol, global_start, now_ms,
         )
 
         all_trades: list[Trade] = []
@@ -236,8 +258,8 @@ class TradeHistoryService:
             end_time = start_time - 1
 
         log.info(
-            "Trade history complete: %d trade(s) over %d day(s) for %s",
-            len(all_trades), LOOKBACK_DAYS, symbol,
+            "Trade history complete: %d trade(s) for %s",
+            len(all_trades), symbol,
         )
 
         return TradeHistory(

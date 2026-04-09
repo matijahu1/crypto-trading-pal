@@ -387,9 +387,10 @@ class TestTradeHistoryWindowIteration:
         assert result.trades == []
 
     def test_all_empty_windows_make_at_most_5_calls(self):
-        # 30d / 7d = 5 windows; each makes exactly 1 call when empty
+        # 30d / 7d-per-window = 5 windows; pin lookback so the assertion
+        # stays correct regardless of the LOOKBACK_DAYS module constant.
         client = SequentialStubClient(pages=[])
-        TradeHistoryService(client).get_history("ZECUSDT")
+        TradeHistoryService(client).get_history("ZECUSDT", lookback_days=30)
 
         assert len(client.call_log) <= 5
 

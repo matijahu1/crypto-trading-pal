@@ -37,7 +37,7 @@ _MS_PER_DAY = 24 * 60 * 60 * 1_000
 
 # Keep a module-level default for backward compatibility and tests
 # that don't go through config.  The live value comes from config.json.
-LOOKBACK_DAYS = 30
+LOOKBACK_DAYS = 60
 
 
 # ---------------------------------------------------------------------------
@@ -150,22 +150,34 @@ class OrderHistoryService:
             client:        API client satisfying OrderHistoryClientProtocol.
             category:      Bybit instrument category ("linear" or "inverse").
             limit:         Max orders per API call (Bybit maximum: 50).
-            lookback_days: Number of calendar days to look back.
-                           Defaults to the module constant; overridden by
-                           values loaded from config.json in main.py.
+            lookback_days: Default number of calendar days to look back.
         """
         self._client       = client
         self._category     = category
         self._limit        = limit
         self._lookback_days = lookback_days
 
-    def get_history(self, symbol: str) -> OrderHistory:
+    def get_history(
+        self,
+        symbol: str,
+        lookback_days: int | None = None,
+        start_time_ms: int | None = None,
+    ) -> OrderHistory:
         """
-        Return all orders for *symbol* within the last lookback_days.
+        Return all orders for *symbol* within the requested time range.
 
         Args:
-            symbol: Perpetual futures symbol, e.g. "ZECUSDT".
-                    Uppercase is enforced automatically.
+            symbol:        Perpetual futures symbol, e.g. "ZECUSDT".
+                           Uppercase is enforced automatically.
+            lookback_days: If provided, overrides the instance-level default.
+                           Ignored when start_time_ms is set.
+            start_time_ms: Explicit UTC millisecond timestamp for the start of
+                           the fetch window.  Takes priority over lookback_days.
+
+        Parameter priority for global_start:
+            1. start_time_ms  — used directly when provided.
+            2. lookback_days  — applied from now when provided.
+            3. self._lookback_days — the constructor default.
 
         Returns:
             OrderHistory dataclass. Orders are sorted by updatedTime DESC.
@@ -176,14 +188,19 @@ class OrderHistoryService:
         """
         symbol = symbol.upper()
 
-        now_ms       = _now_ms()
-        global_start = now_ms - self._lookback_days * _MS_PER_DAY
-        end_time     = now_ms
+        now_ms   = _now_ms()
+        end_time = now_ms
+
+        if start_time_ms is not None:
+            global_start = start_time_ms
+        elif lookback_days is not None:
+            global_start = now_ms - lookback_days * _MS_PER_DAY
+        else:
+            global_start = now_ms - self._lookback_days * _MS_PER_DAY
 
         log.debug(
-            "Order history fetch started: symbol=%s lookback=%dd "
-            "global_start=%d now=%d",
-            symbol, self._lookback_days, global_start, now_ms,
+            "Order history fetch started: symbol=%s global_start=%d now=%d",
+            symbol, global_start, now_ms,
         )
 
         all_orders: list[Order] = []
@@ -272,8 +289,8 @@ class OrderHistoryService:
         )
 
         log.info(
-            "Order history complete: %d order(s) over %d day(s) for %s",
-            len(all_orders), self._lookback_days, symbol,
+            "Order history complete: %d order(s) for %s",
+            len(all_orders), symbol,
         )
 
         return OrderHistory(
