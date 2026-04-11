@@ -51,7 +51,7 @@ Create a directory named `/data` in the project root. This folder will store you
    * `"export_futures_positions"`
    * `"export_trade_history"`
    * `"export_order_history"`
-   * `"export_executions"`
+   * `"export_recent_executions"`
 
 > [!NOTE]
 > These actions are currently functional but are considered "in-progress." Feel free to test which data exports work best for your needs and provide feedback via GitHub Issues.
