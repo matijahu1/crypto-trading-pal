@@ -38,12 +38,10 @@ from services.balance import BalanceService
 from services.futures_position import FuturesPositionService
 from services.trade_history import TradeHistoryService
 from services.order_history import OrderHistoryService
-from services.executions import ExecutionsService
 from exporters.balance_exporter import BalanceExporter
 from exporters.futures_position_exporter import FuturesPositionExporter
 from exporters.trade_history_exporter import make_exporter as make_trade_exporter
 from exporters.order_history_exporter import make_exporter as make_order_exporter
-from exporters.executions_exporter import make_exporter as make_executions_exporter
 
 log = logging.getLogger(__name__)
 
@@ -106,7 +104,6 @@ def _build_registry(
         "export_futures_positions": lambda: _export_futures_positions(client),
         "export_trade_history":     lambda: _export_trade_history(client, symbol, lookback_days),
         "export_order_history":     lambda: _export_order_history(client, symbol, lookback_days),
-        "export_executions":        lambda: _export_executions(client, symbol, lookback_days),
         "export_recent_executions":  lambda: _export_recent_executions(client, None, 10),
     }
 
@@ -228,27 +225,6 @@ def _export_order_history(client: BybitClient, symbol: str, lookback_days: int) 
     path = exporter.export(history)
     log.info("Exported %d order(s) to %s", len(history.orders), path)
 
-
-def _export_executions(client: BybitClient, symbol: str, lookback_days: int) -> None:
-    """Fetch execution history for a single contract and write its CSV."""
-    log.info("Fetching executions for %s...", symbol)
-
-    # TODO: pass lookback_days once ExecutionsService gains a lookback_days param.
-    service  = ExecutionsService(client=client, category="linear")
-    exporter = make_executions_exporter(symbol)
-
-    try:
-        history = service.get_executions(symbol)
-    except BybitAPIError as exc:
-        log.error("Could not fetch executions: %s", exc)
-        return
-
-    if not history.executions:
-        log.warning("No executions found for %s — CSV was not written", symbol)
-        return
-
-    path = exporter.export(history)
-    log.info("Exported %d execution(s) to %s", len(history.executions), path)
 
 def _export_recent_executions(client: BybitClient, symbol: Optional[str], limit: int) -> None:
     """
