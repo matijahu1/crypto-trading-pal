@@ -13,7 +13,7 @@
             "export_futures_positions",
             "export_trade_history",
             "export_order_history",
-            "export_executions"
+            "export_recent_executions"
         ]
     },
     "request_settings": {
