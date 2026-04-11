@@ -38,6 +38,7 @@ ALL_ACTIONS: list[str] = [
     "export_trade_history",
     "export_order_history",
     "export_executions",
+    "export_recent_executions",  # New action for RecentExecutionService
 ]
 
 
@@ -70,15 +71,6 @@ class ActionsConfig:
     """Controls which batch export steps are executed by main.py."""
 
     enabled: list[str] = field(default_factory=lambda: list(ALL_ACTIONS))
-    """
-    List of action names to run.  Order is preserved.
-
-    Recognised values:
-      "export_balances"          — fetch wallet balances → data/balance.csv
-      "export_futures_positions" — fetch open positions  → data/futures_positions.csv
-      "export_trade_history"     — fetch trade history   → data/<SYMBOL>_tradeHistory.csv
-      "export_order_history"     — fetch order history   → data/<SYMBOL>_orderHistory.csv
-    """
 
 
 @dataclass
@@ -86,18 +78,13 @@ class RequestSettingsConfig:
     """Symbol-level settings used by the symbol-specific batch exports."""
 
     symbol: str = "BTCUSDT"
-    """
-    The trading pair symbol passed to trade history, order history, and
-    executions exports.  Must match a valid Bybit linear contract symbol,
-    e.g. "BTCUSDT", "ETHUSDT", "ICPUSDT".
-    """
-
+    
     lookback_days_default: int = 30
+
+    recent_executions_limit: int = 10  # New setting for RecentExecutionService
     """
-    Default number of calendar days of history to fetch for trade history,
-    order history, and executions exports.  Can be overridden per-call via
-    the lookback_days or start_time_ms arguments on get_history().
-    Must be a positive integer.
+    Default number of recent executions to fetch for the recent executions export.
+    Must be a positive integer (typically 1-100).
     """
 
 
@@ -112,23 +99,24 @@ class AppConfig:
 
     @property
     def log_file_path(self) -> pathlib.Path:
-        """Absolute path to the log file (always inside data/)."""
         return DATA_DIR / self.paths.log_file
 
     @property
     def enabled_actions(self) -> list[str]:
-        """Convenience accessor — the ordered list of actions to execute."""
         return self.actions.enabled
 
     @property
     def symbol(self) -> str:
-        """Convenience accessor — the trading pair symbol from request_settings."""
         return self.request_settings.symbol
 
     @property
     def lookback_days_default(self) -> int:
-        """Convenience accessor — default history lookback from request_settings."""
         return self.request_settings.lookback_days_default
+
+    @property
+    def recent_executions_limit(self) -> int:
+        """Convenience accessor for the recent executions limit."""
+        return self.request_settings.recent_executions_limit
 
 
 # ---------------------------------------------------------------------------
@@ -136,29 +124,11 @@ class AppConfig:
 # ---------------------------------------------------------------------------
 
 def load_config(config_path: pathlib.Path = CONFIG_PATH) -> AppConfig:
-    """
-    Load and validate the application configuration from a JSON file.
-
-    The data/ directory is created automatically if absent.
-    If config.json does not exist, a default AppConfig is returned and a
-    template file is written so the user knows what to fill in.
-
-    Args:
-        config_path: Path to the JSON file (default: data/config.json).
-
-    Returns:
-        Validated AppConfig dataclass.
-
-    Raises:
-        ConfigError: If the file contains invalid JSON or a required key
-                     has the wrong type.
-    """
-    # Ensure the data directory exists before we try to read from it
     config_path.parent.mkdir(parents=True, exist_ok=True)
 
     if not config_path.exists():
         _write_template(config_path)
-        return AppConfig()   # safe defaults
+        return AppConfig()
 
     try:
         raw = config_path.read_text(encoding="utf-8")
@@ -168,20 +138,15 @@ def load_config(config_path: pathlib.Path = CONFIG_PATH) -> AppConfig:
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise ConfigError(
-            f"{config_path} contains invalid JSON — {exc}"
-        ) from exc
+        raise ConfigError(f"{config_path} contains invalid JSON — {exc}") from exc
 
     if not isinstance(data, dict):
-        raise ConfigError(
-            f"{config_path} must be a JSON object at the top level"
-        )
+        raise ConfigError(f"{config_path} must be a JSON object at the top level")
 
     return _parse(data, config_path)
 
 
 def _parse(data: dict, config_path: pathlib.Path) -> AppConfig:
-    """Validate types and build the AppConfig from the raw dict."""
     try:
         log_raw              = data.get("logging",          {})
         paths_raw            = data.get("paths",            {})
@@ -209,9 +174,7 @@ def _parse(data: dict, config_path: pathlib.Path) -> AppConfig:
         request_settings_cfg = _parse_request_settings(request_settings_raw, config_path)
 
     except (TypeError, ValueError) as exc:
-        raise ConfigError(
-            f"Invalid value in {config_path}: {exc}"
-        ) from exc
+        raise ConfigError(f"Invalid value in {config_path}: {exc}") from exc
 
     return AppConfig(
         logging=logging_cfg,
@@ -222,18 +185,10 @@ def _parse(data: dict, config_path: pathlib.Path) -> AppConfig:
 
 
 def _parse_actions(actions_raw: dict, config_path: pathlib.Path) -> ActionsConfig:
-    """
-    Parse and validate the 'actions' block.
-
-    The 'enabled' key must be a list of strings.  Unknown action names
-    raise ConfigError so typos are caught early rather than silently skipped.
-    """
     enabled_raw = actions_raw.get("enabled", list(ALL_ACTIONS))
 
     if not isinstance(enabled_raw, list):
-        raise ConfigError(
-            f"'actions.enabled' must be a JSON array in {config_path}"
-        )
+        raise ConfigError(f"'actions.enabled' must be a JSON array in {config_path}")
 
     enabled: list[str] = []
     for item in enabled_raw:
@@ -244,8 +199,7 @@ def _parse_actions(actions_raw: dict, config_path: pathlib.Path) -> ActionsConfi
             )
         if item not in ALL_ACTIONS:
             raise ConfigError(
-                f"Unknown action {item!r} in {config_path}. "
-                f"Known actions: {ALL_ACTIONS}"
+                f"Unknown action {item!r} in {config_path}. Known actions: {ALL_ACTIONS}"
             )
         enabled.append(item)
 
@@ -255,48 +209,34 @@ def _parse_actions(actions_raw: dict, config_path: pathlib.Path) -> ActionsConfi
 def _parse_request_settings(
     request_settings_raw: dict, config_path: pathlib.Path
 ) -> RequestSettingsConfig:
-    """
-    Parse and validate the 'request_settings' block.
-
-    The 'symbol' key must be a non-empty string when present.
-    Falls back to "BTCUSDT" if the block or key is absent.
-
-    The 'lookback_days_default' key must be a positive integer when present.
-    Falls back to 30 if absent.
-    """
     symbol = request_settings_raw.get("symbol", "BTCUSDT")
 
     if not isinstance(symbol, str):
-        raise ConfigError(
-            f"'request_settings.symbol' must be a string in {config_path}, "
-            f"got {type(symbol).__name__!r}"
-        )
+        raise ConfigError(f"'request_settings.symbol' must be a string, got {type(symbol).__name__!r}")
     if not symbol.strip():
-        raise ConfigError(
-            f"'request_settings.symbol' must not be empty in {config_path}"
-        )
+        raise ConfigError(f"'request_settings.symbol' must not be empty")
 
     lookback_days_default = request_settings_raw.get("lookback_days_default", 30)
-
     if not isinstance(lookback_days_default, int) or isinstance(lookback_days_default, bool):
-        raise ConfigError(
-            f"'request_settings.lookback_days_default' must be an integer in "
-            f"{config_path}, got {type(lookback_days_default).__name__!r}"
-        )
+        raise ConfigError(f"'request_settings.lookback_days_default' must be an integer")
     if lookback_days_default < 1:
-        raise ConfigError(
-            f"'request_settings.lookback_days_default' must be a positive integer "
-            f"in {config_path}, got {lookback_days_default!r}"
-        )
+        raise ConfigError(f"'request_settings.lookback_days_default' must be positive")
+
+    # Parse new setting
+    recent_executions_limit = request_settings_raw.get("recent_executions_limit", 10)
+    if not isinstance(recent_executions_limit, int) or isinstance(recent_executions_limit, bool):
+        raise ConfigError(f"'request_settings.recent_executions_limit' must be an integer")
+    if recent_executions_limit < 1:
+        raise ConfigError(f"'request_settings.recent_executions_limit' must be positive")
 
     return RequestSettingsConfig(
         symbol=symbol.strip(),
         lookback_days_default=lookback_days_default,
+        recent_executions_limit=recent_executions_limit,
     )
 
 
 def _write_template(config_path: pathlib.Path) -> None:
-    """Write a starter template so the user knows what to configure."""
     template = {
         "logging": {
             "enabled":     True,
@@ -312,9 +252,7 @@ def _write_template(config_path: pathlib.Path) -> None:
         "request_settings": {
             "symbol": "BTCUSDT",
             "lookback_days_default": 30,
+            "recent_executions_limit": 10,  # Include in template
         },
     }
-    config_path.write_text(
-        json.dumps(template, indent=4) + "\n",
-        encoding="utf-8",
-    )
+    config_path.write_text(json.dumps(template, indent=4) + "\n", encoding="utf-8")
