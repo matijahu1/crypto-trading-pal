@@ -7,12 +7,13 @@ no unittest.mock. Each test follows arrange → act → assert.
 
 import csv
 import pathlib
+from typing import Any, TypeAlias
 
 import pytest
 
 from services.order_history import (
     OrderHistoryService, OrderHistory, Order,
-    LOOKBACK_DAYS, MAX_WINDOW_DAYS, _MS_PER_DAY,
+    LOOKBACK_DAYS, MAX_WINDOW_DAYS, MS_PER_DAY,
 )
 from exporters.order_history_exporter import (
     OrderHistoryExporter,    
@@ -34,7 +35,7 @@ class StubOrderClient:
 
     def __init__(
         self,
-        orders: list[dict] | None = None,
+        orders: list[dict[str, Any]] | None = None,
         raise_error: bool = False,
     ) -> None:
         self._orders     = orders or []
@@ -51,7 +52,8 @@ class StubOrderClient:
         limit: int,
         start_time: int | None = None,
         end_time: int | None = None,
-    ) -> list[dict]:
+        order_status: str | None = None,
+    ) -> list[dict[str, Any]]:
         self.last_symbol   = symbol
         self.last_category = category
         self.last_limit    = limit
@@ -64,7 +66,7 @@ class StubOrderClient:
 class SequentialStubClient:
     """Returns pages in order; [] once exhausted. Records call timestamps."""
 
-    def __init__(self, pages: list[list[dict]]) -> None:
+    def __init__(self, pages: list[list[dict[str, Any]]]) -> None:
         self._pages = list(pages)
         self._idx   = 0
         self.call_log: list[tuple[int | None, int | None]] = []
@@ -76,7 +78,8 @@ class SequentialStubClient:
         limit: int,
         start_time: int | None = None,
         end_time: int | None = None,
-    ) -> list[dict]:
+        order_status: str | None = None,
+    ) -> list[dict[str, Any]]:
         self.call_log.append((start_time, end_time))
         if self._idx < len(self._pages):
             page = self._pages[self._idx]
@@ -90,7 +93,7 @@ class SequentialStubClient:
 # ---------------------------------------------------------------------------
 
 NOW_FIXED    = 1_700_000_000_000   # 2023-11-14 22:13:20 UTC
-GLOBAL_START = NOW_FIXED - LOOKBACK_DAYS * _MS_PER_DAY
+GLOBAL_START = NOW_FIXED - LOOKBACK_DAYS * MS_PER_DAY
 W1_START     = 1_699_395_200_000
 W1_END       = 1_700_000_000_000
 W2_START     = 1_698_790_399_999
@@ -100,7 +103,7 @@ W3_END       = 1_698_790_399_998
 
 
 def raw(order_id: str, created_ms: int, updated_ms: int | None = None,
-        status: str = "Filled") -> dict:
+        status: str = "Filled") -> dict[str, Any]:
     """Build a minimal raw order dict for tests."""
     if updated_ms is None:
         updated_ms = created_ms + 1_000
@@ -121,7 +124,24 @@ def read_csv(path: pathlib.Path) -> list[list[str]]:
     return list(csv.reader(path.read_text(encoding="utf-8").splitlines()))
 
 
-def _make_history(*orders: tuple) -> OrderHistory:
+OrderRow: TypeAlias = tuple[
+    str,    # order_id
+    str,    # symbol
+    str,    # side
+    str,    # order_type
+    float,  # price
+    float,  # qty
+    str,    # order_status
+    str,    # created_ts
+    str,    # updated_ts
+    str,    # created_date
+    str,    # created_time
+    str,    # updated_date
+    str,    # updated_time
+]
+
+
+def _make_history(*orders: OrderRow) -> OrderHistory:
     """
     Build an OrderHistory from
     (order_id, symbol, side, order_type, price, qty, order_status,
@@ -164,7 +184,7 @@ SAMPLE_HISTORY = _make_history(
 class TestOrderHistoryService:
 
     @pytest.fixture(autouse=True)
-    def freeze_time(self, monkeypatch):
+    def freeze_time(self, monkeypatch: pytest.MonkeyPatch):
         import services.order_history as m
         monkeypatch.setattr(m, "_now_ms", lambda: NOW_FIXED)
 
@@ -318,7 +338,7 @@ class TestOrderHistoryService:
 class TestOrderHistoryWindowIteration:
 
     @pytest.fixture(autouse=True)
-    def freeze_time(self, monkeypatch):
+    def freeze_time(self, monkeypatch: pytest.MonkeyPatch):
         import services.order_history as m
         monkeypatch.setattr(m, "_now_ms", lambda: NOW_FIXED)
 
@@ -357,7 +377,7 @@ class TestOrderHistoryWindowIteration:
         OrderHistoryService(client).get_history("ZECUSDT")
         for start, end in client.call_log:
             if start is not None and end is not None:
-                assert (end - start) <= MAX_WINDOW_DAYS * _MS_PER_DAY
+                assert (end - start) <= MAX_WINDOW_DAYS * MS_PER_DAY
 
     def test_empty_window_does_not_stop_outer_loop(self):
         client = SequentialStubClient(pages=[
@@ -438,7 +458,8 @@ class TestOrderHistoryWindowIteration:
     def test_error_propagates(self):
         class ErrClient:
             def get_order_history(self, symbol, category, limit,
-                                  start_time=None, end_time=None):
+                                  start_time=None, end_time=None,
+                                  order_status=None):
                 raise BybitAPIError("Bybit API error [10003]: boom")
         with pytest.raises(BybitAPIError, match="10003"):
             OrderHistoryService(ErrClient()).get_history("ZECUSDT")
@@ -450,17 +471,17 @@ class TestOrderHistoryWindowIteration:
 
 class TestOrderHistoryExporter:
 
-    def test_file_is_created(self, tmp_path):
+    def test_file_is_created(self, tmp_path: pathlib.Path):
         exporter = OrderHistoryExporter(tmp_path / "ZECUSDT_orderHistory.csv")
         exporter.export(SAMPLE_HISTORY)
         assert (tmp_path / "ZECUSDT_orderHistory.csv").exists()
 
-    def test_data_directory_created_automatically(self, tmp_path):
+    def test_data_directory_created_automatically(self, tmp_path: pathlib.Path):
         output = tmp_path / "data" / "ZECUSDT_orderHistory.csv"
         OrderHistoryExporter(output).export(SAMPLE_HISTORY)
         assert output.parent.is_dir()
 
-    def test_file_is_overwritten_not_appended(self, tmp_path):
+    def test_file_is_overwritten_not_appended(self, tmp_path: pathlib.Path):
         output = tmp_path / "out.csv"
         exporter = OrderHistoryExporter(output)
         exporter.export(SAMPLE_HISTORY)
@@ -473,7 +494,7 @@ class TestOrderHistoryExporter:
         rows = read_csv(output)
         assert len(rows) == 2  # header + 1 order
 
-    def test_correct_headers_are_written(self, tmp_path):
+    def test_correct_headers_are_written(self, tmp_path: pathlib.Path):
         output = tmp_path / "out.csv"
         OrderHistoryExporter(output).export(SAMPLE_HISTORY)
         rows = read_csv(output)
@@ -486,39 +507,39 @@ class TestOrderHistoryExporter:
             "updated_date", "updated_time",
         ]
 
-    def test_raw_timestamp_columns_present(self, tmp_path):
+    def test_raw_timestamp_columns_present(self, tmp_path: pathlib.Path):
         output = tmp_path / "out.csv"
         OrderHistoryExporter(output).export(SAMPLE_HISTORY)
         rows = read_csv(output)
         assert "created_ts" in rows[0]
         assert "updated_ts" in rows[0]
 
-    def test_created_ts_before_created_date_in_header(self, tmp_path):
+    def test_created_ts_before_created_date_in_header(self, tmp_path: pathlib.Path):
         output = tmp_path / "out.csv"
         OrderHistoryExporter(output).export(SAMPLE_HISTORY)
         headers = read_csv(output)[0]
         assert headers.index("created_ts") < headers.index("created_date")
 
-    def test_updated_ts_before_updated_date_in_header(self, tmp_path):
+    def test_updated_ts_before_updated_date_in_header(self, tmp_path: pathlib.Path):
         output = tmp_path / "out.csv"
         OrderHistoryExporter(output).export(SAMPLE_HISTORY)
         headers = read_csv(output)[0]
         assert headers.index("updated_ts") < headers.index("updated_date")
 
-    def test_correct_number_of_rows(self, tmp_path):
+    def test_correct_number_of_rows(self, tmp_path: pathlib.Path):
         output = tmp_path / "out.csv"
         OrderHistoryExporter(output).export(SAMPLE_HISTORY)
         rows = read_csv(output)
         assert len(rows) == 4  # 1 header + 3 orders
 
-    def test_correct_column_count_is_13(self, tmp_path):
+    def test_correct_column_count_is_13(self, tmp_path: pathlib.Path):
         output = tmp_path / "out.csv"
         OrderHistoryExporter(output).export(SAMPLE_HISTORY)
         rows = read_csv(output)
         assert len(rows[0]) == 13
         assert len(rows[1]) == 13
 
-    def test_raw_timestamps_written_to_csv(self, tmp_path):
+    def test_raw_timestamps_written_to_csv(self, tmp_path: pathlib.Path):
         output = tmp_path / "out.csv"
         OrderHistoryExporter(output).export(SAMPLE_HISTORY)
         rows = read_csv(output)
@@ -526,7 +547,7 @@ class TestOrderHistoryExporter:
         assert rows[1][7] == "1700000001000"
         assert rows[1][8] == "1700000002000"
 
-    def test_correct_values_first_row(self, tmp_path):
+    def test_correct_values_first_row(self, tmp_path: pathlib.Path):
         output = tmp_path / "out.csv"
         OrderHistoryExporter(output).export(SAMPLE_HISTORY)
         rows = read_csv(output)
@@ -538,7 +559,7 @@ class TestOrderHistoryExporter:
             "2023-11-14", "22:13:22",
         ]
 
-    def test_empty_history_writes_header_only(self, tmp_path):
+    def test_empty_history_writes_header_only(self, tmp_path: pathlib.Path):
         output = tmp_path / "out.csv"
         OrderHistoryExporter(output).export(_make_history())
         rows = read_csv(output)

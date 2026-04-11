@@ -1,26 +1,19 @@
 """
-Bybit API client — wraps the official ``pybit`` SDK.
+api/bybit_client.py — wraps the official ``pybit`` SDK.
 
-Responsibilities:
-  - Own the pybit session lifecycle and configuration
-  - Translate pybit responses into the same plain-dict shape the rest of the
-    application has always expected
-  - Raise BybitAPIError on any SDK or API-level failure
-
-The public method signatures are identical to the previous urllib-based
-implementation, so FundingRateService (and every other service) is unaffected.
-
-To swap exchanges: implement the same two public methods in a new module and
-pass it wherever BybitClient is currently injected.
-
-pybit docs: https://github.com/bybit-exchange/pybit
+Change log:
+  - get_order_history() gains an optional ``order_status`` parameter.
+    When provided, it is forwarded to Bybit as ``orderStatus`` so the
+    server returns only matching orders (e.g. ``"Filled"``).
+    Pass ``None`` (the default) to retrieve all statuses as before.
 """
 
 from __future__ import annotations
 
 from typing import Any
+from typing import cast
 
-from pybit.unified_trading import HTTP  # pybit >= 5.x unified trading session
+from pybit.unified_trading import HTTP # pyright: ignore[reportMissingTypeStubs]
 
 
 class BybitAPIError(Exception):
@@ -31,38 +24,17 @@ class BybitClient:
     """
     Thin adapter around pybit's unified HTTP session.
 
-    Configuration
-    -------------
     testnet : bool
         ``False``  → mainnet  (https://api.bybit.com)   [default]
         ``True``   → testnet  (https://api-testnet.bybit.com)
-
-    api_key / api_secret
-        Only required for authenticated (private) endpoints.
-        All funding-rate and instrument-info calls are public — leave them
-        empty for now; add them when private endpoints are needed.
-
-    Example
-    -------
-    >>> client = BybitClient()                          # mainnet, public only
-    >>> client = BybitClient(testnet=True)              # testnet
-    >>> client = BybitClient(api_key="k", api_secret="s")  # authenticated
     """
 
     def __init__(
         self,
-        testnet: bool = False,
-        api_key: str = "",
-        api_secret: str = "",
+        testnet:    bool = False,
+        api_key:    str  = "",
+        api_secret: str  = "",
     ) -> None:
-        """
-        Args:
-            testnet:    Connect to Bybit testnet when True.
-            api_key:    Optional — only needed for private endpoints.
-            api_secret: Optional — only needed for private endpoints.
-        """
-        # pybit.unified_trading.HTTP is the V5 unified trading session.
-        # Passing empty strings for key/secret is fine for public endpoints.
         self._session = HTTP(
             testnet=testnet,
             api_key=api_key or None,
@@ -75,24 +47,6 @@ class BybitClient:
 
     @staticmethod
     def _unwrap(response: dict[str, Any], symbol: str | None = None) -> dict[str, Any]:
-        """
-        Validate a pybit response and return it as-is.
-
-        pybit already raises ``InvalidRequestError`` / ``FailedRequestError``
-        for non-zero retCodes when ``recv_window`` is set, but the unified
-        session can also return retCode != 0 silently on some edge cases.
-        This guard makes error handling consistent regardless.
-
-        Args:
-            response: Raw dict returned by any pybit session method.
-            symbol:   Optional symbol name for clearer error messages.
-
-        Returns:
-            The validated response dict (identical object, not a copy).
-
-        Raises:
-            BybitAPIError: If retCode is non-zero.
-        """
         ret_code = response.get("retCode", 0)
         if ret_code != 0:
             msg = response.get("retMsg", "unknown error")
@@ -101,291 +55,135 @@ class BybitClient:
 
     # ------------------------------------------------------------------
     # Public API methods
-    # (signatures are intentionally identical to the old urllib client)
     # ------------------------------------------------------------------
 
     def get_funding_rate_history(
         self,
-        symbol: str,
+        symbol:   str,
         category: str = "linear",
-        limit: int = 8,
+        limit:    int = 8,
     ) -> list[dict[str, Any]]:
-        """
-        Fetch recent funding rate history for a perpetual futures symbol.
-
-        Args:
-            symbol:   E.g. "ZECUSDT"
-            category: "linear" for USDT-margined, "inverse" for coin-margined.
-            limit:    Number of records to return (default 8, max 200).
-
-        Returns:
-            List of funding rate records, newest-first:
-            [{"symbol": "ZECUSDT", "fundingRate": "0.0001",
-              "fundingRateTimestamp": "1700000000000"}, ...]
-
-        Equivalent pybit call:
-            session.get_funding_rate_history(
-                category="linear", symbol="ZECUSDT", limit=8
-            )
-
-        Raises:
-            BybitAPIError: On API-level errors or network failures.
-        """
         try:
-            response = self._session.get_funding_rate_history(
-                category=category,
-                symbol=symbol,
-                limit=limit,
+            response = self._session.get_funding_rate_history(  # type: ignore
+                category=category, symbol=symbol, limit=limit,
             )
         except Exception as exc:
             raise BybitAPIError(f"Failed to fetch funding rate history: {exc}") from exc
-
-        data = self._unwrap(response, symbol)
-        return data["result"]["list"]
+        return self._unwrap(response, symbol)["result"]["list"] # type: ignore
 
     def get_instruments_info(
         self,
-        symbol: str,
+        symbol:   str,
         category: str = "linear",
     ) -> dict[str, Any]:
-        """
-        Fetch instrument metadata (including funding interval) for a symbol.
-
-        Args:
-            symbol:   E.g. "ZECUSDT"
-            category: "linear" or "inverse".
-
-        Returns:
-            Single instrument info dict, e.g.:
-            {"symbol": "ZECUSDT", "fundingInterval": 480, ...}
-
-        Equivalent pybit call:
-            session.get_instruments_info(category="linear", symbol="ZECUSDT")
-
-        Raises:
-            BybitAPIError: If symbol is not found or the request fails.
-        """
         try:
-            response = self._session.get_instruments_info(
-                category=category,
-                symbol=symbol,
+            response = self._session.get_instruments_info( # type: ignore
+                category=category, symbol=symbol,
             )
         except Exception as exc:
             raise BybitAPIError(f"Failed to fetch instruments info: {exc}") from exc
-
-        data = self._unwrap(response, symbol)
+        data  = self._unwrap(response, symbol) # type: ignore
         items: list[dict[str, Any]] = data["result"]["list"]
         if not items:
             raise BybitAPIError(f"Symbol '{symbol}' not found on Bybit ({category})")
         return items[0]
 
     def get_wallet_balance(self, account_type: str = "UNIFIED") -> list[dict[str, Any]]:
-        """
-        Fetch coin balances for the authenticated account.
-
-        This is a **private** endpoint — api_key and api_secret must be set.
-
-        Args:
-            account_type: "UNIFIED" for the unified trading account (default),
-                          "CONTRACT" for classic derivatives accounts.
-
-        Returns:
-            List of coin balance dicts, e.g.:
-            [{"coin": "BTC", "walletBalance": "0.25",
-              "availableToWithdraw": "0.20"}, ...]
-
-        Equivalent pybit call:
-            session.get_wallet_balance(accountType="UNIFIED")
-
-        Raises:
-            BybitAPIError: On auth failure (retCode 10003/10004) or any other
-                           API / network error.
-        """
         try:
-            response = self._session.get_wallet_balance(accountType=account_type)
+            response = self._session.get_wallet_balance(accountType=account_type) # type: ignore
         except Exception as exc:
             raise BybitAPIError(f"Failed to fetch wallet balance: {exc}") from exc
-
-        data = self._unwrap(response)
-
-        # Bybit returns a list of accounts; each account has a "coin" sub-list.
-        # We flatten to a single list of coin dicts for simplicity.
-        accounts: list[dict[str, Any]] = data["result"]["list"]
-        if not accounts:
-            return []
-        return accounts[0].get("coin", [])
+        accounts: list[dict[str, Any]] = self._unwrap(response)["result"]["list"] # type: ignore
+        return accounts[0].get("coin", []) if accounts else []
 
     def get_positions(self, category: str = "linear") -> list[dict[str, Any]]:
-        """
-        Fetch all open positions for the authenticated account.
-
-        This is a **private** endpoint — api_key and api_secret must be set.
-
-        Args:
-            category: "linear" for USDT-margined perpetuals (default),
-                      "inverse" for coin-margined perpetuals.
-
-        Returns:
-            List of position dicts for all symbols with an open position, e.g.:
-            [{"symbol": "BTCUSDT", "side": "Buy", "size": "0.01",
-              "avgPrice": "65000", "markPrice": "65200",
-              "unrealisedPnl": "2.0"}, ...]
-
-        Equivalent pybit call:
-            session.get_positions(category="linear", settleCoin="USDT")
-
-        Raises:
-            BybitAPIError: On auth failure or any other API / network error.
-        """
         try:
-            # settleCoin="USDT" fetches all linear positions without requiring
-            # a specific symbol — the only way to get the full position list.
-            response = self._session.get_positions(
+            response = self._session.get_positions( # type: ignore
                 category=category,
                 settleCoin="USDT" if category == "linear" else "BTC",
             )
         except Exception as exc:
             raise BybitAPIError(f"Failed to fetch positions: {exc}") from exc
-
-        data = self._unwrap(response)
-        return data["result"]["list"]
+        return self._unwrap(response)["result"]["list"] # type: ignore
 
     def get_trade_history(
         self,
-        symbol: str,
-        category: str = "linear",
-        limit: int = 100,
+        symbol:     str,
+        category:   str      = "linear",
+        limit:      int      = 100,
         start_time: int | None = None,
-        end_time: int | None = None,
+        end_time:   int | None = None,
     ) -> list[dict[str, Any]]:
-        """
-        Fetch execution (trade) history for a single symbol.
-
-        This is a **private** endpoint — api_key and api_secret must be set.
-
-        Args:
-            symbol:     Perpetual futures symbol, e.g. "ZECUSDT".
-            category:   "linear" for USDT-margined perpetuals (default),
-                        "inverse" for coin-margined perpetuals.
-            limit:      Number of executions to return. Max 100 per Bybit's API.
-            start_time: Optional window start as a Unix ms timestamp (inclusive).
-                        When provided, end_time must also be provided.
-            end_time:   Optional window end as a Unix ms timestamp (inclusive).
-
-        Returns:
-            List of execution dicts, newest-first, e.g.:
-            [{"execId": "abc123", "symbol": "ZECUSDT", "side": "Buy",
-              "execPrice": "30.5", "execQty": "10", "execTime": "1700000000000"
-             }, ...]
-
-        Equivalent pybit call:
-            session.get_executions(category="linear", symbol="ZECUSDT",
-                                   startTime=..., endTime=..., limit=100)
-
-        Raises:
-            BybitAPIError: On auth failure or any other API / network error.
-        """
-        kwargs: dict[str, Any] = dict(
-            category=category,
-            symbol=symbol,
-            limit=limit,
-        )
+        kwargs: dict[str, Any] = dict(category=category, symbol=symbol, limit=limit)
         if start_time is not None:
             kwargs["startTime"] = start_time
         if end_time is not None:
             kwargs["endTime"] = end_time
-
         try:
-            response = self._session.get_executions(**kwargs)
+            response = self._session.get_executions(**kwargs) # type: ignore
         except Exception as exc:
             raise BybitAPIError(f"Failed to fetch trade history: {exc}") from exc
-
-        data = self._unwrap(response, symbol)
-        return data["result"]["list"]
+        return self._unwrap(response, symbol)["result"]["list"] # type: ignore
 
     def get_order_history(
         self,
-        symbol: str,
-        category: str = "linear",
-        limit: int = 50,
-        start_time: int | None = None,
-        end_time: int | None = None,
+        symbol:       str,
+        category:     str      = "linear",
+        limit:        int      = 50,
+        start_time:   int | None = None,
+        end_time:     int | None = None,
+        order_status: str | None = None,
     ) -> list[dict[str, Any]]:
         """
         Fetch order history for a single symbol.
 
-        This is a **private** endpoint — api_key and api_secret must be set.
-
         Args:
-            symbol:     Perpetual futures symbol, e.g. "ZECUSDT".
-            category:   "linear" for USDT-margined perpetuals (default),
-                        "inverse" for coin-margined perpetuals.
-            limit:      Number of orders to return. Max 50 per Bybit's API.
-            start_time: Optional window start as a Unix ms timestamp (inclusive).
-                        Filters by createdTime. When provided, end_time must
-                        also be provided.
-            end_time:   Optional window end as a Unix ms timestamp (inclusive).
-                        Filters by createdTime.
+            symbol:       Perpetual futures symbol, e.g. "CCUSDT".
+            category:     "linear" or "inverse".
+            limit:        Max orders per call (Bybit maximum: 50).
+            start_time:   Window start as Unix ms timestamp (filters createdTime).
+            end_time:     Window end as Unix ms timestamp (filters createdTime).
+            order_status: Optional server-side status filter forwarded as
+                          ``orderStatus``.  E.g. ``"Filled"`` returns only
+                          fully executed orders.  ``None`` returns all statuses.
 
         Returns:
-            List of order dicts, newest-first by createdTime, e.g.:
-            [{"orderId": "abc123", "symbol": "ZECUSDT", "side": "Buy",
-              "orderType": "Limit", "price": "30.5", "qty": "10",
-              "orderStatus": "Filled",
-              "createdTime": "1700000000000",
-              "updatedTime": "1700000060000"}, ...]
-
-        Equivalent pybit call:
-            session.get_order_history(category="linear", symbol="ZECUSDT",
-                                      startTime=..., endTime=..., limit=50)
+            List of order dicts, newest-first by createdTime.
 
         Raises:
             BybitAPIError: On auth failure or any other API / network error.
         """
-        kwargs: dict[str, Any] = dict(
-            category=category,
-            symbol=symbol,
-            limit=limit,
-        )
+        kwargs: dict[str, Any] = dict(category=category, symbol=symbol, limit=limit)
         if start_time is not None:
             kwargs["startTime"] = start_time
         if end_time is not None:
             kwargs["endTime"] = end_time
+        if order_status is not None:
+            kwargs["orderStatus"] = order_status   # ← server-side filter
 
         try:
-            response = self._session.get_order_history(**kwargs)
+            response = self._session.get_order_history(**kwargs) # type: ignore
         except Exception as exc:
             raise BybitAPIError(f"Failed to fetch order history: {exc}") from exc
-
-        data = self._unwrap(response, symbol)
-        return data["result"]["list"]
+        
+        data = self._unwrap(response, symbol) # type: ignore
+        return cast(list[dict[str, Any]], data["result"]["list"])        
 
     def get_executions(
-            self,
-            symbol: str | None = None,
-            category: str = "linear",
-            limit: int = 100,
-            exec_type: str | None = None,  
-        ) -> list[dict[str, Any]]:
-            """
-            Fetch execution history with optional server-side filtering.
-            """
-            kwargs: dict[str, Any] = {
-                "category": category,
-                "limit": limit,
-            }
-            if symbol:
-                kwargs["symbol"] = symbol
-            
-            # Pass execType to the API if provided (e.g., "Trade")
-            if exec_type:
-                kwargs["execType"] = exec_type
-
-            try:
-                response = self._session.get_executions(**kwargs)
-            except Exception as exc:
-                context = symbol if symbol else "ACCOUNT"
-                raise BybitAPIError(f"Failed to fetch executions for {context}: {exc}") from exc
-
-            data = self._unwrap(response, symbol)
-            return data["result"]["list"]
+        self,
+        symbol:    str | None = None,
+        category:  str        = "linear",
+        limit:     int        = 100,
+        exec_type: str | None = None,
+    ) -> list[dict[str, Any]]:
+        kwargs: dict[str, Any] = {"category": category, "limit": limit}
+        if symbol:
+            kwargs["symbol"] = symbol
+        if exec_type:
+            kwargs["execType"] = exec_type
+        try:
+            response = self._session.get_executions(**kwargs) # type: ignore
+        except Exception as exc:
+            context = symbol if symbol else "ACCOUNT"
+            raise BybitAPIError(f"Failed to fetch executions for {context}: {exc}") from exc
+        return self._unwrap(response, symbol)["result"]["list"] # type: ignore
