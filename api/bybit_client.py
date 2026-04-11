@@ -361,43 +361,31 @@ class BybitClient:
         return data["result"]["list"]
 
     def get_executions(
-        self,
-        symbol: str,
-        category: str = "linear",
-        limit: int = 100,
-    ) -> list[dict[str, Any]]:
-        """
-        Fetch execution history for a single symbol, including fee details.
+            self,
+            symbol: str | None = None,
+            category: str = "linear",
+            limit: int = 100,
+            exec_type: str | None = None,  
+        ) -> list[dict[str, Any]]:
+            """
+            Fetch execution history with optional server-side filtering.
+            """
+            kwargs: dict[str, Any] = {
+                "category": category,
+                "limit": limit,
+            }
+            if symbol:
+                kwargs["symbol"] = symbol
+            
+            # Pass execType to the API if provided (e.g., "Trade")
+            if exec_type:
+                kwargs["execType"] = exec_type
 
-        This is a **private** endpoint — api_key and api_secret must be set.
+            try:
+                response = self._session.get_executions(**kwargs)
+            except Exception as exc:
+                context = symbol if symbol else "ACCOUNT"
+                raise BybitAPIError(f"Failed to fetch executions for {context}: {exc}") from exc
 
-        Args:
-            symbol:   Perpetual futures symbol, e.g. "ZECUSDT".
-            category: "linear" for USDT-margined perpetuals (default),
-                      "inverse" for coin-margined perpetuals.
-            limit:    Number of executions to return. Max 100 per Bybit's API.
-
-        Returns:
-            List of execution dicts, newest-first, e.g.:
-            [{"execId": "abc123", "symbol": "ZECUSDT", "side": "Buy",
-              "execPrice": "30.5", "execQty": "10",
-              "execFee": "0.0183", "feeRate": "0.0006",
-              "execType": "Trade", "execTime": "1700000000000"}, ...]
-
-        Equivalent pybit call:
-            session.get_executions(category="linear", symbol="ZECUSDT", limit=100)
-
-        Raises:
-            BybitAPIError: On auth failure or any other API / network error.
-        """
-        try:
-            response = self._session.get_executions(
-                category=category,
-                symbol=symbol,
-                limit=limit,
-            )
-        except Exception as exc:
-            raise BybitAPIError(f"Failed to fetch executions: {exc}") from exc
-
-        data = self._unwrap(response, symbol)
-        return data["result"]["list"]
+            data = self._unwrap(response, symbol)
+            return data["result"]["list"]

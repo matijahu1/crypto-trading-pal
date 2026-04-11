@@ -27,7 +27,7 @@ Application settings (logging, actions, paths) are loaded from data/config.json.
 import logging
 import os
 import sys
-from typing import Callable
+from typing import Callable, Optional
 
 from dotenv import load_dotenv
 
@@ -107,6 +107,7 @@ def _build_registry(
         "export_trade_history":     lambda: _export_trade_history(client, symbol, lookback_days),
         "export_order_history":     lambda: _export_order_history(client, symbol, lookback_days),
         "export_executions":        lambda: _export_executions(client, symbol, lookback_days),
+        "export_recent_executions":  lambda: _export_recent_executions(client, None, 10),
     }
 
 
@@ -249,6 +250,37 @@ def _export_executions(client: BybitClient, symbol: str, lookback_days: int) -> 
     path = exporter.export(history)
     log.info("Exported %d execution(s) to %s", len(history.executions), path)
 
+def _export_recent_executions(client: BybitClient, symbol: Optional[str], limit: int) -> None:
+    """
+    Fetch the most recent trade fills and write them to a CSV.
+    If symbol is None, it fetches the latest fills for the entire account.
+    """
+    from services.recent_executions import RecentExecutionService
+    from exporters.recent_executions_exporter import make_recent_exporter
+
+    # Kontext für das Logging bestimmen
+    context = symbol if symbol else "ACCOUNT-WIDE"
+    log.info("Fetching recent fills for %s (limit: %d)...", context, limit)
+
+    service  = RecentExecutionService(client=client, category="linear")
+    
+    # Wenn kein Symbol vorhanden ist, nennen wir die Datei "ACCOUNT_recent_fills.csv"
+    exporter = make_recent_exporter(symbol if symbol else "ACCOUNT")
+
+    try:
+        # Führt die API-Abfrage aus
+        history = service.get_recent_fills(symbol=symbol, limit=limit)
+    except BybitAPIError as exc:
+        log.error("Could not fetch recent executions for %s: %s", context, exc)
+        return
+
+    if not history.executions:
+        log.warning("No recent executions found for %s — CSV was not written", context)
+        return
+
+    # CSV schreiben
+    path = exporter.export(history)
+    log.info("Exported %d recent execution(s) to %s", len(history.executions), path)
 
 if __name__ == "__main__":
     main()
