@@ -8,11 +8,11 @@ The symbol used for trade history, order history, and executions exports is
 read from "request_settings.symbol" in data/config.json.
 
 Available action names:
-  "export_balances"          → data/balance.csv
-  "export_futures_positions" → data/futures_positions.csv
-  "export_trade_history"     → data/<symbol>_tradeHistory.csv
-  "export_order_history"     → data/<symbol>_orderHistory.csv
-  "export_executions"        → data/<symbol>_executions.csv
+  "export_balances"          → data/exported/balance.csv
+  "export_futures_positions" → data/exported/futures_positions.csv
+  "export_trade_history"     → data/exported/<symbol>_tradeHistory.csv
+  "export_order_history"     → data/exported/<symbol>_orderHistory.csv
+  "export_recent_executions" → data/exported/<symbol>_recent_fills.csv
 
 Run:
     python main.py
@@ -34,14 +34,15 @@ from dotenv import load_dotenv
 from config.config_loader import load_config, ConfigError
 from config.logging_setup import setup_logging
 from api.bybit_client import BybitClient, BybitAPIError
+from exporters.path_provider import PathProvider
 from services.balance import BalanceService
 from services.futures_position import FuturesPositionService
 from services.trade_history import TradeHistoryService
 from services.order_history import OrderHistoryService
 from exporters.balance_exporter import BalanceExporter
 from exporters.futures_position_exporter import FuturesPositionExporter
-from exporters.trade_history_exporter import make_exporter as make_trade_exporter
-from exporters.order_history_exporter import make_exporter as make_order_exporter
+from exporters.trade_history_exporter import TradeHistoryExporter
+from exporters.order_history_exporter import OrderHistoryExporter
 
 log = logging.getLogger(__name__)
 
@@ -53,7 +54,6 @@ def main() -> None:
     try:
         config = load_config()
     except ConfigError as exc:
-        # Logging is not set up yet, so print is the only option here
         print(f"Configuration error: {exc}", file=sys.stderr)
         sys.exit(1)
 
@@ -78,53 +78,69 @@ def main() -> None:
     client = BybitClient(testnet=testnet, api_key=api_key, api_secret=api_secret)
     log.debug("BybitClient initialised (testnet=%s)", testnet)
 
-    # 5. Dispatch — run only the actions listed in config
-    _dispatch(client, config.enabled_actions, config.symbol, config.lookback_days_default)
+    # 5. Build a single PathProvider for this run.
+    #    ensure_dir() is called once here so all export actions can assume
+    #    the output folder already exists when they run.
+    paths = PathProvider(base_dir=config.exported_dir, symbol=config.symbol)
+    paths.ensure_dir()
+    log.debug("Export directory: %s", paths.base_dir)
+
+    # 6. Dispatch — run only the actions listed in config
+    _dispatch(client, config.enabled_actions, paths, config.lookback_days_default)
 
     log.info("Batch export run complete")
 
 
 # ---------------------------------------------------------------------------
-# Action registry — maps each config action name to its implementation
+# Action registry
 # ---------------------------------------------------------------------------
 
 def _build_registry(
-    client: BybitClient, symbol: str, lookback_days: int
+    client: BybitClient,
+    paths: PathProvider,
+    lookback_days: int,
 ) -> dict[str, Callable[[], None]]:
     """
-    Return a dict mapping every known action name to a zero-argument callable.
+    Map every known action name to a zero-argument callable.
+
+    PathProvider is passed in rather than raw strings so that each action can
+    obtain its output path *before* touching the Bybit API.  This is the key
+    enabler for the incremental-fetch feature planned next: an action can check
+    whether the file already exists and decide whether to skip or append.
 
     Adding a new action in future:
-      1. Write the _export_* function below
-      2. Add it to ALL_ACTIONS in config_loader.py
-      3. Register it here
+      1. Write the _export_* function below.
+      2. Add a path method to PathProvider.
+      3. Add the action name to ALL_ACTIONS in config_loader.py.
+      4. Register it here.
     """
+    symbol = paths.symbol
+
     return {
-        "export_balances":          lambda: _export_balances(client),
-        "export_futures_positions": lambda: _export_futures_positions(client),
-        "export_trade_history":     lambda: _export_trade_history(client, symbol, lookback_days),
-        "export_order_history":     lambda: _export_order_history(client, symbol, lookback_days),
-        "export_recent_executions":  lambda: _export_recent_executions(client, None, 10),
+        "export_balances":
+            lambda: _export_balances(client, paths),
+        "export_futures_positions":
+            lambda: _export_futures_positions(client, paths),
+        "export_trade_history":
+            lambda: _export_trade_history(client, paths, lookback_days),
+        "export_order_history":
+            lambda: _export_order_history(client, paths, lookback_days),
+        "export_recent_executions":
+            lambda: _export_recent_executions(client, paths, symbol, limit=10),
     }
 
 
 def _dispatch(
     client: BybitClient,
     enabled_actions: list[str],
-    symbol: str,
+    paths: PathProvider,
     lookback_days: int,
 ) -> None:
-    """
-    Run each action in *enabled_actions* in order.
-
-    Unknown action names are already rejected by load_config(), so by the
-    time we reach here every name is guaranteed to be in the registry.
-    """
     if not enabled_actions:
         log.warning("No actions are enabled in config.json — nothing to do")
         return
 
-    registry = _build_registry(client, symbol, lookback_days)
+    registry = _build_registry(client, paths, lookback_days)
 
     for action in enabled_actions:
         log.debug("Running action: %s", action)
@@ -132,15 +148,16 @@ def _dispatch(
 
 
 # ---------------------------------------------------------------------------
-# Individual export steps — each is self-contained and independently failable
+# Individual export steps
 # ---------------------------------------------------------------------------
 
-def _export_balances(client: BybitClient) -> None:
-    """Fetch wallet balances and write data/balance.csv."""
-    log.info("Fetching wallet balances...")
+def _export_balances(client: BybitClient, paths: PathProvider) -> None:
+    """Fetch wallet balances and write to the path supplied by PathProvider."""
+    output_path = paths.balance_path()
+    log.info("Fetching wallet balances → %s", output_path)
 
     service  = BalanceService(client=client, account_type="UNIFIED")
-    exporter = BalanceExporter()
+    exporter = BalanceExporter(output_path)
 
     try:
         wallet = service.get_balances()
@@ -149,7 +166,7 @@ def _export_balances(client: BybitClient) -> None:
         return
 
     if not wallet.coins:
-        log.warning("No non-zero balances found — data/balance.csv was not written")
+        log.warning("No non-zero balances found — %s was not written", output_path)
         return
 
     path = exporter.export(wallet)
@@ -158,12 +175,13 @@ def _export_balances(client: BybitClient) -> None:
         log.debug("  %s: total=%s, available=%s", cb.coin, cb.total, cb.available)
 
 
-def _export_futures_positions(client: BybitClient) -> None:
-    """Fetch open futures positions and write data/futures_positions.csv."""
-    log.info("Fetching futures positions...")
+def _export_futures_positions(client: BybitClient, paths: PathProvider) -> None:
+    """Fetch open futures positions and write to the path supplied by PathProvider."""
+    output_path = paths.futures_positions_path()
+    log.info("Fetching futures positions → %s", output_path)
 
     service  = FuturesPositionService(client=client, category="linear")
-    exporter = FuturesPositionExporter()
+    exporter = FuturesPositionExporter(output_path)
 
     try:
         snapshot = service.get_positions()
@@ -172,7 +190,7 @@ def _export_futures_positions(client: BybitClient) -> None:
         return
 
     if not snapshot.positions:
-        log.warning("No open positions found — data/futures_positions.csv was not written")
+        log.warning("No open positions found — %s was not written", output_path)
         return
 
     path = exporter.export(snapshot)
@@ -184,79 +202,91 @@ def _export_futures_positions(client: BybitClient) -> None:
         )
 
 
-def _export_trade_history(client: BybitClient, symbol: str, lookback_days: int) -> None:
-    """Fetch trade history for a single contract and write its CSV."""
-    log.info("Fetching trade history for %s...", symbol)
+def _export_trade_history(
+    client: BybitClient, paths: PathProvider, lookback_days: int
+) -> None:
+    """Fetch trade history and write to the path supplied by PathProvider."""
+    output_path = paths.trade_history_path()
+    log.info("Fetching trade history for %s → %s", paths.symbol, output_path)
 
     service  = TradeHistoryService(client=client, category="linear", lookback_days=lookback_days)
-    exporter = make_trade_exporter(symbol)
+    exporter = TradeHistoryExporter(output_path)
 
     try:
-        history = service.get_history(symbol)
+        history = service.get_history(paths.symbol)
     except BybitAPIError as exc:
         log.error("Could not fetch trade history: %s", exc)
         return
 
     if not history.trades:
-        log.warning("No trade history found for %s — CSV was not written", symbol)
+        log.warning("No trade history found for %s — %s was not written", paths.symbol, output_path)
         return
 
     path = exporter.export(history)
     log.info("Exported %d trade(s) to %s", len(history.trades), path)
 
 
-def _export_order_history(client: BybitClient, symbol: str, lookback_days: int) -> None:
-    """Fetch order history for a single contract and write its CSV."""
-    log.info("Fetching order history for %s...", symbol)
+def _export_order_history(
+    client: BybitClient, paths: PathProvider, lookback_days: int
+) -> None:
+    """Fetch order history and write to the path supplied by PathProvider.
+
+    The output path is obtained from PathProvider *before* any API call is
+    made.  This means a future incremental-fetch implementation can check
+    ``output_path.exists()`` here and skip or append accordingly.
+    """
+    output_path = paths.order_history_path()
+    log.info("Fetching order history for %s → %s", paths.symbol, output_path)
 
     service  = OrderHistoryService(client=client, category="linear", lookback_days=lookback_days)
-    exporter = make_order_exporter(symbol)
+    exporter = OrderHistoryExporter(output_path)   # path injected — no internal logic
 
     try:
-        history = service.get_history(symbol)
+        history = service.get_history(paths.symbol)
     except BybitAPIError as exc:
         log.error("Could not fetch order history: %s", exc)
         return
 
     if not history.orders:
-        log.warning("No order history found for %s — CSV was not written", symbol)
+        log.warning(
+            "No order history found for %s — %s was not written", paths.symbol, output_path
+        )
         return
 
     path = exporter.export(history)
     log.info("Exported %d order(s) to %s", len(history.orders), path)
 
 
-def _export_recent_executions(client: BybitClient, symbol: Optional[str], limit: int) -> None:
-    """
-    Fetch the most recent trade fills and write them to a CSV.
-    If symbol is None, it fetches the latest fills for the entire account.
-    """
+def _export_recent_executions(
+    client: BybitClient,
+    paths: PathProvider,
+    symbol: Optional[str],
+    limit: int,
+) -> None:
+    """Fetch recent fills and write to the path supplied by PathProvider."""
     from services.recent_executions import RecentExecutionService
-    from exporters.recent_executions_exporter import make_recent_exporter
+    from exporters.recent_executions_exporter import RecentExecutionsExporter
 
-    # Kontext für das Logging bestimmen
-    context = symbol if symbol else "ACCOUNT-WIDE"
-    log.info("Fetching recent fills for %s (limit: %d)...", context, limit)
+    output_path = paths.recent_fills_path()
+    context     = symbol if symbol else "ACCOUNT-WIDE"
+    log.info("Fetching recent fills for %s (limit: %d) → %s", context, limit, output_path)
 
     service  = RecentExecutionService(client=client, category="linear")
-    
-    # Wenn kein Symbol vorhanden ist, nennen wir die Datei "ACCOUNT_recent_fills.csv"
-    exporter = make_recent_exporter(symbol if symbol else "ACCOUNT")
+    exporter = RecentExecutionsExporter(output_path)   # path injected
 
     try:
-        # Führt die API-Abfrage aus
         history = service.get_recent_fills(symbol=symbol, limit=limit)
     except BybitAPIError as exc:
         log.error("Could not fetch recent executions for %s: %s", context, exc)
         return
 
     if not history.executions:
-        log.warning("No recent executions found for %s — CSV was not written", context)
+        log.warning("No recent executions found for %s — %s was not written", context, output_path)
         return
 
-    # CSV schreiben
     path = exporter.export(history)
     log.info("Exported %d recent execution(s) to %s", len(history.executions), path)
+
 
 if __name__ == "__main__":
     main()

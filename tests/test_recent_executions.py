@@ -7,7 +7,7 @@ import pathlib
 import pytest
 from typing import Any
 
-from services.recent_executions import RecentExecutionService, RecentExecutionHistory, RecentExecution
+from services.recent_executions import RecentExecutionClientProtocol, RecentExecutionService, RecentExecutionHistory, RecentExecution
 from exporters.recent_executions_exporter import (
     RecentExecutionsExporter,
     make_recent_exporter,
@@ -19,7 +19,7 @@ from api.bybit_client import BybitAPIError
 # Stub client
 # ---------------------------------------------------------------------------
 
-class StubRecentExecutionClient:
+class StubRecentExecutionClient(RecentExecutionClientProtocol):
     def __init__(self, executions: list[dict] | None = None, raise_error: bool = False) -> None:
         self._executions = executions or []
         self._raise_error = raise_error

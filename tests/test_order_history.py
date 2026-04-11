@@ -15,8 +15,7 @@ from services.order_history import (
     LOOKBACK_DAYS, MAX_WINDOW_DAYS, _MS_PER_DAY,
 )
 from exporters.order_history_exporter import (
-    OrderHistoryExporter,
-    make_exporter,
+    OrderHistoryExporter,    
     HEADERS,
 )
 
@@ -544,11 +543,3 @@ class TestOrderHistoryExporter:
         OrderHistoryExporter(output).export(_make_history())
         rows = read_csv(output)
         assert rows == [HEADERS]
-
-    def test_make_exporter_builds_correct_filename(self, tmp_path):
-        assert make_exporter("ZECUSDT", output_dir=tmp_path)._output_path == \
-               tmp_path / "ZECUSDT_orderHistory.csv"
-
-    def test_make_exporter_default_dir_is_data(self):
-        assert make_exporter("ZECUSDT")._output_path == \
-               pathlib.Path("data") / "ZECUSDT_orderHistory.csv"

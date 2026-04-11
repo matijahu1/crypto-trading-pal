@@ -2,13 +2,20 @@
 config/config_loader.py — load and validate the application configuration.
 
 Responsibilities:
-  - Locate data/config.json relative to the project root
-  - Create the data/ directory if it does not exist
-  - Parse and validate the JSON structure
-  - Return a typed AppConfig dataclass
-  - Raise ConfigError with a clear message on any problem
+  - Locate data/config.json relative to the project root.
+  - Create the data/ directory if it does not exist.
+  - Parse and validate the JSON structure.
+  - Return a typed AppConfig dataclass.
+  - Raise ConfigError with a clear message on any problem.
 
 Config file location: data/config.json
+
+Change log:
+  - PathsConfig gains ``exported_dir`` (default: ``data/exported/``).
+    This is the folder written to by all CSV exporters.
+    Override in config.json under ``"paths": { "exported_dir": "..." }``.
+  - AppConfig exposes ``exported_dir`` as a convenience property that always
+    returns an absolute pathlib.Path ready to hand to PathProvider.
 """
 
 from __future__ import annotations
@@ -22,14 +29,13 @@ from dataclasses import dataclass, field
 # Paths
 # ---------------------------------------------------------------------------
 
-# Project root = the directory that contains this config/ package
 _PROJECT_ROOT = pathlib.Path(__file__).parent.parent
-DATA_DIR       = _PROJECT_ROOT / "data"
-CONFIG_PATH    = DATA_DIR / "config.json"
+DATA_DIR      = _PROJECT_ROOT / "data"
+CONFIG_PATH   = DATA_DIR / "config.json"
 
 
 # ---------------------------------------------------------------------------
-# All known action names — used for validation and as template defaults
+# All known action names
 # ---------------------------------------------------------------------------
 
 ALL_ACTIONS: list[str] = [
@@ -37,7 +43,7 @@ ALL_ACTIONS: list[str] = [
     "export_futures_positions",
     "export_trade_history",
     "export_order_history",
-    "export_recent_executions",  
+    "export_recent_executions",
 ]
 
 
@@ -50,7 +56,7 @@ class ConfigError(Exception):
 
 
 # ---------------------------------------------------------------------------
-# Config dataclasses — one field per supported config key
+# Config dataclasses
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -62,29 +68,27 @@ class LoggingConfig:
 
 @dataclass
 class PathsConfig:
-    log_file: str = "bybit_bot.log"
+    log_file:     str = "bybit_bot.log"
+    exported_dir: str = "data/exported"
+    """
+    Directory for all exported CSV files.
+    Relative paths are resolved from the project root.
+    Override in config.json: ``"paths": { "exported_dir": "data/exported" }``
+    """
 
 
 @dataclass
 class ActionsConfig:
     """Controls which batch export steps are executed by main.py."""
-
     enabled: list[str] = field(default_factory=lambda: list(ALL_ACTIONS))
 
 
 @dataclass
 class RequestSettingsConfig:
     """Symbol-level settings used by the symbol-specific batch exports."""
-
-    symbol: str = "BTCUSDT"
-    
-    lookback_days_default: int = 30
-
-    recent_executions_limit: int = 10  # New setting for RecentExecutionService
-    """
-    Default number of recent executions to fetch for the recent executions export.
-    Must be a positive integer (typically 1-100).
-    """
+    symbol:                   str = "BTCUSDT"
+    lookback_days_default:    int = 30
+    recent_executions_limit:  int = 10
 
 
 @dataclass
@@ -95,6 +99,10 @@ class AppConfig:
     paths:            PathsConfig           = field(default_factory=PathsConfig)
     actions:          ActionsConfig         = field(default_factory=ActionsConfig)
     request_settings: RequestSettingsConfig = field(default_factory=RequestSettingsConfig)
+
+    # ------------------------------------------------------------------
+    # Convenience properties
+    # ------------------------------------------------------------------
 
     @property
     def log_file_path(self) -> pathlib.Path:
@@ -114,8 +122,23 @@ class AppConfig:
 
     @property
     def recent_executions_limit(self) -> int:
-        """Convenience accessor for the recent executions limit."""
         return self.request_settings.recent_executions_limit
+
+    @property
+    def exported_dir(self) -> pathlib.Path:
+        """
+        Absolute path to the CSV output folder.
+
+        If ``paths.exported_dir`` in config.json is a relative path it is
+        resolved against the project root, so it works regardless of the
+        working directory from which the script is launched.
+
+        Example::
+
+            config.exported_dir  # → PosixPath("/home/user/project/data/exported")
+        """
+        p = pathlib.Path(self.paths.exported_dir)
+        return p if p.is_absolute() else _PROJECT_ROOT / p
 
 
 # ---------------------------------------------------------------------------
@@ -166,9 +189,7 @@ def _parse(data: dict, config_path: pathlib.Path) -> AppConfig:
             level=str(log_raw.get("level",          "INFO")).upper(),
             log_to_file=bool(log_raw.get("log_to_file", False)),
         )
-        paths_cfg            = PathsConfig(
-            log_file=str(paths_raw.get("log_file", "bybit_bot.log")),
-        )
+        paths_cfg            = _parse_paths(paths_raw, config_path)
         actions_cfg          = _parse_actions(actions_raw, config_path)
         request_settings_cfg = _parse_request_settings(request_settings_raw, config_path)
 
@@ -181,6 +202,21 @@ def _parse(data: dict, config_path: pathlib.Path) -> AppConfig:
         actions=actions_cfg,
         request_settings=request_settings_cfg,
     )
+
+
+def _parse_paths(paths_raw: dict, config_path: pathlib.Path) -> PathsConfig:
+    log_file = str(paths_raw.get("log_file", "bybit_bot.log"))
+
+    exported_dir = paths_raw.get("exported_dir", "data/exported")
+    if not isinstance(exported_dir, str):
+        raise ConfigError(
+            f"'paths.exported_dir' must be a string in {config_path}, "
+            f"got {type(exported_dir).__name__!r}"
+        )
+    if not exported_dir.strip():
+        raise ConfigError(f"'paths.exported_dir' must not be empty in {config_path}")
+
+    return PathsConfig(log_file=log_file, exported_dir=exported_dir.strip())
 
 
 def _parse_actions(actions_raw: dict, config_path: pathlib.Path) -> ActionsConfig:
@@ -209,9 +245,10 @@ def _parse_request_settings(
     request_settings_raw: dict, config_path: pathlib.Path
 ) -> RequestSettingsConfig:
     symbol = request_settings_raw.get("symbol", "BTCUSDT")
-
     if not isinstance(symbol, str):
-        raise ConfigError(f"'request_settings.symbol' must be a string, got {type(symbol).__name__!r}")
+        raise ConfigError(
+            f"'request_settings.symbol' must be a string, got {type(symbol).__name__!r}"
+        )
     if not symbol.strip():
         raise ConfigError(f"'request_settings.symbol' must not be empty")
 
@@ -221,7 +258,6 @@ def _parse_request_settings(
     if lookback_days_default < 1:
         raise ConfigError(f"'request_settings.lookback_days_default' must be positive")
 
-    # Parse new setting
     recent_executions_limit = request_settings_raw.get("recent_executions_limit", 10)
     if not isinstance(recent_executions_limit, int) or isinstance(recent_executions_limit, bool):
         raise ConfigError(f"'request_settings.recent_executions_limit' must be an integer")
@@ -243,15 +279,16 @@ def _write_template(config_path: pathlib.Path) -> None:
             "log_to_file": False,
         },
         "paths": {
-            "log_file": "bybit_bot.log",
+            "log_file":     "bybit_bot.log",
+            "exported_dir": "data/exported",
         },
         "actions": {
             "enabled": list(ALL_ACTIONS),
         },
         "request_settings": {
-            "symbol": "BTCUSDT",
-            "lookback_days_default": 30,
-            "recent_executions_limit": 10,  # Include in template
+            "symbol":                  "BTCUSDT",
+            "lookback_days_default":   30,
+            "recent_executions_limit": 10,
         },
     }
     config_path.write_text(json.dumps(template, indent=4) + "\n", encoding="utf-8")
