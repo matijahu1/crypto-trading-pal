@@ -39,11 +39,11 @@ CONFIG_PATH   = DATA_DIR / "config.json"
 # ---------------------------------------------------------------------------
 
 ALL_ACTIONS: list[str] = [
-    "export_balances",
-    "export_futures_positions",
-    "export_trade_history",
-    "export_order_history",
-    "export_recent_executions",
+    "balances",
+    "futures_positions",
+    "trade_history",
+    "order_history",
+    "recent_executions",
 ]
 
 

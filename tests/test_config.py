@@ -454,27 +454,27 @@ class TestActionsConfig:
         # Arrange
         cfg_path = tmp_path / "config.json"
         write_config(cfg_path, {
-            "actions": {"enabled": ["export_balances", "export_trade_history"]}
+            "actions": {"enabled": ["balances", "trade_history"]}
         })
 
         # Act
         result = load_config(cfg_path)
 
         # Assert
-        assert result.enabled_actions == ["export_balances", "export_trade_history"]
+        assert result.enabled_actions == ["balances", "trade_history"]
 
     def test_single_action_loaded(self, tmp_path):
         # Arrange
         cfg_path = tmp_path / "config.json"
         write_config(cfg_path, {
-            "actions": {"enabled": ["export_order_history"]}
+            "actions": {"enabled": ["order_history"]}
         })
 
         # Act
         result = load_config(cfg_path)
 
         # Assert
-        assert result.enabled_actions == ["export_order_history"]
+        assert result.enabled_actions == ["order_history"]
 
     def test_empty_enabled_list_is_accepted(self, tmp_path):
         # Arrange — user wants to run nothing (valid, not an error)
@@ -491,10 +491,10 @@ class TestActionsConfig:
         # Arrange — reversed order
         cfg_path = tmp_path / "config.json"
         reversed_actions = [
-            "export_order_history",
-            "export_trade_history",
-            "export_futures_positions",
-            "export_balances",
+            "order_history",
+            "trade_history",
+            "futures_positions",
+            "balances",
         ]
         write_config(cfg_path, {"actions": {"enabled": reversed_actions}})
 
@@ -535,14 +535,14 @@ class TestActionsConfig:
         data = json.loads(cfg_path.read_text(encoding="utf-8"))
 
         # Act / Assert
-        for action in ["export_balances", "export_futures_positions",
-                       "export_trade_history", "export_order_history"]:
+        for action in ["balances", "futures_positions",
+                       "trade_history", "order_history"]:
             assert action in data["actions"]["enabled"]
 
     def test_enabled_actions_property_on_app_config(self, tmp_path):
         # Arrange
         cfg_path = tmp_path / "config.json"
-        write_config(cfg_path, {"actions": {"enabled": ["export_balances"]}})
+        write_config(cfg_path, {"actions": {"enabled": ["balances"]}})
 
         # Act
         result = load_config(cfg_path)
@@ -557,7 +557,7 @@ class TestActionsConfig:
     def test_unknown_action_name_raises_config_error(self, tmp_path):
         # Arrange — typo in action name
         cfg_path = tmp_path / "config.json"
-        write_config(cfg_path, {"actions": {"enabled": ["export_balances", "typo_action"]}})
+        write_config(cfg_path, {"actions": {"enabled": ["balances", "typo_action"]}})
 
         # Act / Assert
         with pytest.raises(ConfigError, match="typo_action"):
@@ -571,12 +571,12 @@ class TestActionsConfig:
         # Act / Assert
         with pytest.raises(ConfigError) as exc_info:
             load_config(cfg_path)
-        assert "export_balances" in str(exc_info.value)
+        assert "balances" in str(exc_info.value)
 
     def test_actions_enabled_not_a_list_raises_config_error(self, tmp_path):
         # Arrange — "enabled" is a string, not a list
         cfg_path = tmp_path / "config.json"
-        write_config(cfg_path, {"actions": {"enabled": "export_balances"}})
+        write_config(cfg_path, {"actions": {"enabled": "balances"}})
 
         # Act / Assert
         with pytest.raises(ConfigError, match="array"):
@@ -585,7 +585,7 @@ class TestActionsConfig:
     def test_actions_section_not_an_object_raises_config_error(self, tmp_path):
         # Arrange
         cfg_path = tmp_path / "config.json"
-        write_config(cfg_path, {"actions": ["export_balances"]})
+        write_config(cfg_path, {"actions": ["balances"]})
 
         # Act / Assert
         with pytest.raises(ConfigError):
