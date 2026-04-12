@@ -1,18 +1,18 @@
 """
 main.py — batch entry point.
 
-Which exports run is controlled by the "actions.enabled" list in
+Which actions run is controlled by the "actions.enabled" list in
 data/config.json.  Comment out or remove any action name to skip that step.
 
-The symbol used for trade history, order history, and executions exports is
+The symbol used for trade history and order history actions is
 read from "request_settings.symbol" in data/config.json.
 
 Available action names:
-  "export_balances"          → data/exported/balance.csv
-  "export_futures_positions" → data/exported/futures_positions.csv
-  "export_trade_history"     → data/exported/<symbol>_tradeHistory.csv
-  "export_order_history"     → data/exported/<symbol>_orderHistory.csv
-  "export_recent_executions" → data/exported/<symbol>_recent_fills.csv
+  "balances"          → data/exported/balance.csv
+  "futures_positions" → data/exported/futures_positions.csv
+  "trade_history"     → data/exported/<symbol>_tradeHistory.csv
+  "order_history"     → data/exported/<symbol>_orderHistory.csv
+  "recent_executions" → data/exported/ACCOUNT_recent_fills.csv
 
 Run:
     python main.py
@@ -49,7 +49,7 @@ log = logging.getLogger(__name__)
 
 
 def main() -> None:
-    """Bootstrap configuration, then run the enabled batch exports."""
+    """Bootstrap configuration, then run the enabled batch actions."""
 
     # 1. Load application config (data/config.json) — must come first
     try:
@@ -60,7 +60,7 @@ def main() -> None:
 
     # 2. Set up logging from config
     setup_logging(config)
-    log.info("Starting batch export run")
+    log.info("Starting batch run")
     log.debug("Enabled actions: %s", config.enabled_actions)
 
     # 3. Load credentials from .env (never stored in config.json)
@@ -85,7 +85,7 @@ def main() -> None:
     # 6. Dispatch — run only the actions listed in config
     _dispatch(client, config.enabled_actions, paths, config.lookback_days_default)
 
-    log.info("Batch export run complete")
+    log.info("Batch run complete")
 
 
 # ---------------------------------------------------------------------------
@@ -101,22 +101,22 @@ def _build_registry(
     Map every known action name to a zero-argument callable.
 
     Adding a new action in future:
-      1. Write the _export_* function below.
+      1. Write the _run_* function below.
       2. Add a path method to PathProvider.
       3. Add the action name to ALL_ACTIONS in config_loader.py.
       4. Register it here.
     """
     return {
-        "export_balances":
-            lambda: _export_balances(client, paths),
-        "export_futures_positions":
-            lambda: _export_futures_positions(client, paths),
-        "export_trade_history":
-            lambda: _export_trade_history(client, paths, lookback_days),
-        "export_order_history":
-            lambda: _export_order_history(client, paths, lookback_days),
-        "export_recent_executions":
-            lambda: _export_recent_executions(client, paths, paths.symbol, limit=10),
+        "balances":
+            lambda: _run_balances(client, paths),
+        "futures_positions":
+            lambda: _run_futures_positions(client, paths),
+        "trade_history":
+            lambda: _run_trade_history(client, paths, lookback_days),
+        "order_history":
+            lambda: _run_order_history(client, paths, lookback_days),
+        "recent_executions":
+            lambda: _run_recent_executions(client, paths, paths.symbol, limit=10),
     }
 
 
@@ -138,10 +138,10 @@ def _dispatch(
 
 
 # ---------------------------------------------------------------------------
-# Individual export steps
+# Individual action handlers
 # ---------------------------------------------------------------------------
 
-def _export_balances(client: BybitClient, paths: PathProvider) -> None:
+def _run_balances(client: BybitClient, paths: PathProvider) -> None:
     output_path = paths.balance_path()
     log.info("Fetching wallet balances → %s", output_path)
 
@@ -164,7 +164,7 @@ def _export_balances(client: BybitClient, paths: PathProvider) -> None:
         log.debug("  %s: total=%s, available=%s", cb.coin, cb.total, cb.available)
 
 
-def _export_futures_positions(client: BybitClient, paths: PathProvider) -> None:
+def _run_futures_positions(client: BybitClient, paths: PathProvider) -> None:
     output_path = paths.futures_positions_path()
     log.info("Fetching futures positions → %s", output_path)
 
@@ -185,7 +185,7 @@ def _export_futures_positions(client: BybitClient, paths: PathProvider) -> None:
     log.info("Exported %d position(s) to %s", len(snapshot.positions), path)
 
 
-def _export_trade_history(
+def _run_trade_history(
     client: BybitClient, paths: PathProvider, lookback_days: int
 ) -> None:
     output_path = paths.trade_history_path()
@@ -208,7 +208,7 @@ def _export_trade_history(
     log.info("Exported %d trade(s) to %s", len(history.trades), path)
 
 
-def _export_order_history(
+def _run_order_history(
     client: BybitClient, paths: PathProvider, lookback_days: int
 ) -> None:
     """
@@ -230,7 +230,7 @@ def _export_order_history(
     without restructuring this function.
     """
     output_path = paths.order_history_path()
-    log.info("Exporting filled order history for %s → %s", paths.symbol, output_path)
+    log.info("Processing filled order history for %s → %s", paths.symbol, output_path)
 
     # ── 1. Initialise merger — loads existing CSV rows if the file exists ─────
     merger = OrderHistoryMerger(output_path)
@@ -270,7 +270,7 @@ def _export_order_history(
     )
 
 
-def _export_recent_executions(
+def _run_recent_executions(
     client: BybitClient,
     paths: PathProvider,
     symbol: Optional[str],
