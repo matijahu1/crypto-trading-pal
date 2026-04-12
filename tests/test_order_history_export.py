@@ -472,7 +472,7 @@ class TestOrderHistoryServiceStatusFilter:
 
 class TestExportOrderHistoryAction:
     """
-    _export_order_history in main.py orchestrates Load-Merge-Sort-Overwrite.
+    _run_order_history in main.py orchestrates Load-Merge-Sort-Overwrite.
     Verified end-to-end with mocks — zero real I/O or network.
     """
 
@@ -501,8 +501,8 @@ class TestExportOrderHistoryAction:
             patch("main.OrderHistoryMerger",  return_value=mock_merger),
             patch("main.OrderHistoryExporter"),
         ):
-            from main import _export_order_history
-            _export_order_history(mock_client, mock_provider, lookback_days=30)
+            from main import _run_order_history
+            _run_order_history(mock_client, mock_provider, lookback_days=30)
 
         mock_service.get_history.assert_called_once_with("CCUSDT", order_status="Filled")
 
@@ -534,8 +534,8 @@ class TestExportOrderHistoryAction:
             MockMerger.return_value  = mock_merger
             MockExporter.return_value = MagicMock()
 
-            from main import _export_order_history
-            _export_order_history(mock_client, mock_provider, lookback_days=30)
+            from main import _run_order_history
+            _run_order_history(mock_client, mock_provider, lookback_days=30)
 
         MockMerger.assert_called_once_with(fake_path)
         MockExporter.assert_called_once_with(fake_path)
@@ -565,8 +565,8 @@ class TestExportOrderHistoryAction:
             patch("main.OrderHistoryMerger",  return_value=mock_merger),
             patch("main.OrderHistoryExporter") as MockExporter,
         ):
-            from main import _export_order_history
-            _export_order_history(mock_client, mock_provider, lookback_days=30)
+            from main import _run_order_history
+            _run_order_history(mock_client, mock_provider, lookback_days=30)
 
         MockExporter.assert_not_called()
 
@@ -611,8 +611,8 @@ class TestExportOrderHistoryAction:
             patch("main.OrderHistoryMerger",  return_value=mock_merger),
             patch("main.OrderHistoryExporter"),
         ):
-            from main import _export_order_history
-            _export_order_history(mock_client, mock_provider, lookback_days=30)
+            from main import _run_order_history
+            _run_order_history(mock_client, mock_provider, lookback_days=30)
 
         assert call_order.index("path_provider") < call_order.index("api"), \
             f"path_provider must be called before api; order was {call_order}"

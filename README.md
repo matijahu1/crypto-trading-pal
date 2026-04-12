@@ -50,11 +50,11 @@ Create a directory named `/data` in the project root. This folder will store you
 2. Copy this file into your newly created `/data` folder.
 3. Rename the copy to `config.json`.
 4. **Customize Actions:** Open `config.json` and remove any actions you do not currently need. The following actions are available:
-   * `"export_balances"`
-   * `"export_futures_positions"`
-   * `"export_trade_history"`
-   * `"export_order_history"`
-   * `"export_recent_executions"`
+   * `"balances"`
+   * `"futures_positions"`
+   * `"trade_history"`
+   * `"order_history"`
+   * `"recent_executions"`
 
 > [!NOTE]
 > These actions are currently functional but are considered "in-progress." Feel free to test which data exports work best for your needs and provide feedback via GitHub Issues.
