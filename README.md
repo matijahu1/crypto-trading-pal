@@ -18,20 +18,23 @@ The **CLI** is primarily intended for quick testing and public data exploration.
 
 ## ✨ Features
 
-### 1. Interactive CLI (Testing & Exploration)
+### 1. CSV Export (Batch Mode)
+Automate data collection for external analysis.
+* Exports balance data to `data/balance.csv`.
+* Exports active futures positions to `data/futures_positions.csv`.
+* Exports historical trade data to `data/{SYMBOL}_tradeHistory.csv`.
+* Exports order history to `data/{SYMBOL}_orderHistory.csv`.
+    * *Smart Update:* Automatically detects existing records in the CSV and only adds new "Filled" orders to avoid duplicates.
+* Exports recent trade executions to `data/{SYMBOL}_executions.csv`.
+
+### 2. Interactive CLI (Testing & Exploration)
 Used for quick connectivity checks and market snapshots.
 * `balance`: View account equity (requires API key).
 * `show <symbol>`: Displays the **last 8 funding rates** for a specific pair. 
     * *Note: `show` do not require an API key.*
 
-### 2. CSV Export (Batch Mode)
-Automate data collection for external analysis.
-* Exports balance data to `data/balance.csv`.
-* Exports active futures positions to `data/futures_positions.csv`.
-
 ### 3. Bybit Integration
 * Powered by the `pybit` SDK for robust API communication.
-* Secure credential management using `python-dotenv`.
 
 ---
 

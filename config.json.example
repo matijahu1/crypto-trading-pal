@@ -5,7 +5,8 @@
         "log_to_file": true
     },
     "paths": {
-        "log_file": "bybit_bot.log"
+        "log_file": "bybit_bot.log",
+        "exported_dir": "data/exported"
     },
     "actions": {
         "enabled": [
@@ -17,7 +18,8 @@
         ]
     },
     "request_settings": {
-        "symbol": "BTCUSDT",
-        "lookback_days_default": 30        
+        "symbol": "CCUSDT",
+        "lookback_days_default": 60,
+        "recent_executions_limit": 10
     }
 }
