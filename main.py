@@ -31,19 +31,19 @@ from typing import Callable, Optional
 
 from dotenv import load_dotenv
 
-from config.config_loader import load_config, ConfigError
+from api.bybit_client import BybitAPIError, BybitClient
+from config.config_loader import ConfigError, load_config
 from config.logging_setup import setup_logging
-from api.bybit_client import BybitClient, BybitAPIError
-from exporters.path_provider import PathProvider
-from services.balance import BalanceService
-from services.futures_position import FuturesPositionService
-from services.trade_history import TradeHistoryService
-from services.order_history import OrderHistory, OrderHistoryService
 from exporters.balance_exporter import BalanceExporter
 from exporters.futures_position_exporter import FuturesPositionExporter
-from exporters.trade_history_exporter import TradeHistoryExporter
 from exporters.order_history_exporter import OrderHistoryExporter
 from exporters.order_history_merger import OrderHistoryMerger
+from exporters.path_provider import PathProvider
+from exporters.trade_history_exporter import TradeHistoryExporter
+from services.balance import BalanceService
+from services.futures_position import FuturesPositionService
+from services.order_history import OrderHistory, OrderHistoryService
+from services.trade_history import TradeHistoryService
 
 log = logging.getLogger(__name__)
 
@@ -61,13 +61,13 @@ def main() -> None:
     # 2. Set up logging from config
     setup_logging(config)
     log.info("Starting batch run")
-    log.debug("Enabled actions: %s", config.enabled_actions)
+    log.info("Enabled actions: %s", config.enabled_actions)
 
     # 3. Load credentials from .env (never stored in config.json)
     load_dotenv()
-    api_key    = os.getenv("BYBIT_API_KEY", "")
+    api_key = os.getenv("BYBIT_API_KEY", "")
     api_secret = os.getenv("BYBIT_API_SECRET", "")
-    testnet    = os.getenv("BYBIT_TESTNET", "false").lower() == "true"
+    testnet = os.getenv("BYBIT_TESTNET", "false").lower() == "true"
 
     if not api_key or not api_secret:
         log.error("BYBIT_API_KEY and BYBIT_API_SECRET must be set in your .env file")
@@ -92,6 +92,7 @@ def main() -> None:
 # Action registry
 # ---------------------------------------------------------------------------
 
+
 def _build_registry(
     client: BybitClient,
     paths: PathProvider,
@@ -107,16 +108,14 @@ def _build_registry(
       4. Register it here.
     """
     return {
-        "balances":
-            lambda: _run_balances(client, paths),
-        "futures_positions":
-            lambda: _run_futures_positions(client, paths),
-        "trade_history":
-            lambda: _run_trade_history(client, paths, lookback_days),
-        "order_history":
-            lambda: _run_order_history(client, paths, lookback_days),
-        "recent_executions":
-            lambda: _run_recent_executions(client, paths, paths.symbol, limit=10),
+        "balances": lambda: _run_balances(client, paths),
+        "futures_positions": lambda: _run_futures_positions(client, paths),
+        "trade_history": lambda: _run_trade_history(client, paths, lookback_days),
+        "order_history": lambda: _run_order_history(client, paths, lookback_days),
+        "recent_executions": lambda: _run_recent_executions(
+            client, paths, paths.symbol, limit=10
+        ),
+        "generate_lifo_report": lambda: _run_generate_lifo_report(client, paths),
     }
 
 
@@ -141,11 +140,12 @@ def _dispatch(
 # Individual action handlers
 # ---------------------------------------------------------------------------
 
+
 def _run_balances(client: BybitClient, paths: PathProvider) -> None:
     output_path = paths.balance_path()
     log.info("Fetching wallet balances → %s", output_path)
 
-    service  = BalanceService(client=client, account_type="UNIFIED")
+    service = BalanceService(client=client, account_type="UNIFIED")
     exporter = BalanceExporter(output_path)
 
     try:
@@ -168,7 +168,7 @@ def _run_futures_positions(client: BybitClient, paths: PathProvider) -> None:
     output_path = paths.futures_positions_path()
     log.info("Fetching futures positions → %s", output_path)
 
-    service  = FuturesPositionService(client=client, category="linear")
+    service = FuturesPositionService(client=client, category="linear")
     exporter = FuturesPositionExporter(output_path)
 
     try:
@@ -191,7 +191,9 @@ def _run_trade_history(
     output_path = paths.trade_history_path()
     log.info("Fetching trade history for %s → %s", paths.symbol, output_path)
 
-    service  = TradeHistoryService(client=client, category="linear", lookback_days=lookback_days)
+    service = TradeHistoryService(
+        client=client, category="linear", lookback_days=lookback_days
+    )
     exporter = TradeHistoryExporter(output_path)
 
     try:
@@ -201,7 +203,9 @@ def _run_trade_history(
         return
 
     if not history.trades:
-        log.warning("No trade history found for %s — %s not written", paths.symbol, output_path)
+        log.warning(
+            "No trade history found for %s — %s not written", paths.symbol, output_path
+        )
         return
 
     path = exporter.export(history)
@@ -252,7 +256,9 @@ def _run_order_history(
 
     if not combined:
         log.warning(
-            "No filled orders found for %s — %s was not written", paths.symbol, output_path
+            "No filled orders found for %s — %s was not written",
+            paths.symbol,
+            output_path,
         )
         return
 
@@ -276,14 +282,16 @@ def _run_recent_executions(
     symbol: Optional[str],
     limit: int,
 ) -> None:
-    from services.recent_executions import RecentExecutionService
     from exporters.recent_executions_exporter import RecentExecutionsExporter
+    from services.recent_executions import RecentExecutionService
 
     output_path = paths.recent_fills_path()
-    context     = symbol if symbol else "ACCOUNT-WIDE"
-    log.info("Fetching recent fills for %s (limit: %d) → %s", context, limit, output_path)
+    context = symbol if symbol else "ACCOUNT-WIDE"
+    log.info(
+        "Fetching recent fills for %s (limit: %d) → %s", context, limit, output_path
+    )
 
-    service  = RecentExecutionService(client=client, category="linear")
+    service = RecentExecutionService(client=client, category="linear")
     exporter = RecentExecutionsExporter(output_path)
 
     try:
@@ -293,11 +301,81 @@ def _run_recent_executions(
         return
 
     if not history.executions:
-        log.warning("No recent executions found for %s — %s not written", context, output_path)
+        log.warning(
+            "No recent executions found for %s — %s not written", context, output_path
+        )
         return
 
     path = exporter.export(history)
     log.info("Exported %d recent execution(s) to %s", len(history.executions), path)
+
+
+def _run_generate_lifo_report(client: BybitClient, paths: PathProvider) -> None:
+    """
+    Generate a LIFO inventory report from the existing order history CSV.
+
+    Input dependency:
+        ``{SYMBOL}_orderHistory.csv`` in the configured export directory.
+
+    Strategy:
+        1. Resolve the input path via PathProvider.
+        2. Validate the file exists — log a clear error and return if not.
+        3. Run LifoReportService to process all orders with LIFO matching.
+        4. Export the result to ``{SYMBOL}_lifo_inventory.csv``.
+    """
+    from exporters.lifo_report_exporter import LifoReportExporter
+    from services.lifo_report import LifoReportService
+
+    input_path = paths.order_history_path()
+    output_path = paths.lifo_report_path()
+
+    log.info("Generating LIFO inventory report for %s → %s", paths.symbol, output_path)
+
+    # ── 1. Validate input ────────────────────────────────────────────────────
+    if not input_path.exists():
+        log.error(
+            "Error: Order history file not found for %s. "
+            "Please run 'order_history' first. (Expected: %s)",
+            paths.symbol,
+            input_path,
+        )
+        return
+
+    # ── 2. Run LIFO engine ───────────────────────────────────────────────────
+    service = LifoReportService(input_path)
+    try:
+        records = service.generate()
+    except (FileNotFoundError, ValueError) as exc:
+        log.error("Could not generate LIFO report for %s: %s", paths.symbol, exc)
+        return
+
+    if not records:
+        log.warning(
+            "No lot records produced for %s — %s was not written",
+            paths.symbol,
+            output_path,
+        )
+        return
+
+    # ── 3. Export ────────────────────────────────────────────────────────────
+    exporter = LifoReportExporter(output_path)
+    path = exporter.export(records)
+
+    open_count = sum(1 for r in records if r.status == "OPEN")
+    partial_count = sum(1 for r in records if r.status == "PARTIAL")
+    closed_count = sum(1 for r in records if r.status == "CLOSED")
+    total_pnl = sum(r.realized_pnl for r in records)
+
+    log.info(
+        "Exported %d lot(s) to %s — OPEN: %d, PARTIAL: %d, CLOSED: %d | "
+        "Total realized PnL: %.4f",
+        len(records),
+        path,
+        open_count,
+        partial_count,
+        closed_count,
+        total_pnl,
+    )
 
 
 if __name__ == "__main__":

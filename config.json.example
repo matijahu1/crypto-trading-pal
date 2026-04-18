@@ -1,7 +1,7 @@
 {
     "logging": {
         "enabled": true,
-        "level": "DEBUG",
+        "level": "INFO",
         "log_to_file": true
     },
     "paths": {
@@ -14,7 +14,8 @@
             "futures_positions",
             "trade_history",
             "order_history",
-            "recent_executions"
+            "recent_executions",
+            "generate_lifo_report"
         ]
     },
     "request_settings": {

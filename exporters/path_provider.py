@@ -103,6 +103,9 @@ class PathProvider:
             e.g. ``data/exported/CCUSDT_recent_fills.csv``
         """
         return self._base_dir / f"{self._symbol}_recent_fills.csv"
+    
+    def lifo_report_path(self) -> pathlib.Path:
+        return self._base_dir / f"{self._symbol}_lifo_inventory.csv"
 
     # ------------------------------------------------------------------
     # Symbol-independent paths

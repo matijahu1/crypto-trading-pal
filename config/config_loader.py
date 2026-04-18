@@ -44,6 +44,7 @@ ALL_ACTIONS: list[str] = [
     "trade_history",
     "order_history",
     "recent_executions",
+    "generate_lifo_report"
 ]
 
 
