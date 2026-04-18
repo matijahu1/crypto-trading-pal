@@ -10,10 +10,6 @@ A Python-based trading assistant designed for cryptocurrency futures trading on 
 
 The **CLI** is primarily intended for quick testing and public data exploration. The core roadmap and all upcoming advanced features—such as PnL calculations and history tracking—are focused exclusively on the **Batch Export** engine to facilitate deep data analysis.
 
-**Upcoming Features (Batch Export Only):**
-* Trade history 
-* LIFO-based (Last-In, First-Out) profit and loss calculations
-
 ---
 
 ## ✨ Features
@@ -26,6 +22,7 @@ Automate data collection for external analysis.
 * Exports order history to `data/{SYMBOL}_orderHistory.csv`.
     * *Smart Update:* Automatically detects existing records in the CSV and only adds new "Filled" orders to avoid duplicates.
 * Exports recent trade executions to `data/{SYMBOL}_executions.csv`.
+* Generate report with closed and open lots based on LIFO logic including Profit and Loss to `data/{SYMBOL}_lifo_inventory.csv`.
 
 ### 2. Interactive CLI (Testing & Exploration)
 Used for quick connectivity checks and market snapshots.
@@ -55,6 +52,7 @@ Create a directory named `/data` in the project root. This folder will store you
    * `"trade_history"`
    * `"order_history"`
    * `"recent_executions"`
+   * `"generate_lifo_report"`
 
 > [!NOTE]
 > These actions are currently functional but are considered "in-progress." Feel free to test which data exports work best for your needs and provide feedback via GitHub Issues.
