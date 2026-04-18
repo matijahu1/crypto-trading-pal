@@ -6,13 +6,30 @@ Change log:
     When provided, it is forwarded to Bybit as ``orderStatus`` so the
     server returns only matching orders (e.g. ``"Filled"``).
     Pass ``None`` (the default) to retrieve all statuses as before.
+  - BybitClient.__init__() now accepts ``recv_window`` (default: 10_000 ms)
+    and ``sync_time`` (default: True).
+  - When ``sync_time=True``, the constructor fetches the Bybit server time
+    once, computes the offset between local and server clocks, and patches
+    ``pybit._helpers.generate_timestamp`` so that every subsequent signed
+    request uses a corrected timestamp.  This prevents ErrCode 10002
+    ("request expired / invalid timestamp") on machines whose clocks drift.
 """
 
 from __future__ import annotations
 
+import logging
+import time
 from typing import Any, cast
 
+import pybit._helpers as _pybit_helpers  # pyright: ignore[reportMissingTypeStubs]
 from pybit.unified_trading import HTTP  # pyright: ignore[reportMissingTypeStubs]
+
+log = logging.getLogger(__name__)
+
+# Bybit accepts timestamps within ±recv_window ms of server time.
+# The API hard-caps recv_window at 60 000 ms; 10 000 is a safe default
+# that gives 10 s of tolerance without weakening replay protection.
+_DEFAULT_RECV_WINDOW: int = 10_000
 
 
 class BybitAPIError(Exception):
@@ -23,9 +40,30 @@ class BybitClient:
     """
     Thin adapter around pybit's unified HTTP session.
 
-    testnet : bool
-        ``False``  → mainnet  (https://api.bybit.com)   [default]
-        ``True``   → testnet  (https://api-testnet.bybit.com)
+    Args:
+        testnet:     ``False`` → mainnet (default), ``True`` → testnet.
+        api_key:     Bybit API key.
+        api_secret:  Bybit API secret.
+        recv_window: Maximum age (ms) Bybit will accept for a signed request.
+                     Default is 10 000 ms.  Bybit hard-caps this at 60 000 ms.
+        sync_time:   When ``True`` (default), fetch the Bybit server time at
+                     startup, compute the local-to-server clock offset, and
+                     patch pybit's timestamp generator so all subsequent
+                     signed requests carry a corrected timestamp.  Set to
+                     ``False`` to skip the network call (e.g. in unit tests).
+
+    Clock synchronisation detail:
+        pybit builds the ``X-BAPI-TIMESTAMP`` header by calling
+        ``pybit._helpers.generate_timestamp()``, which returns
+        ``int(time.time() * 1000)``.  We replace that function with a closure
+        that adds the measured offset, so no pybit internals need forking.
+
+        offset = server_time_ms - local_time_ms   (measured at startup)
+
+        corrected_timestamp = int(time.time() * 1000) + offset
+
+        The offset is re-measured only at construction time.  If the local
+        clock drifts significantly during a long run, reconstruct the client.
     """
 
     def __init__(
@@ -33,12 +71,132 @@ class BybitClient:
         testnet: bool = False,
         api_key: str = "",
         api_secret: str = "",
+        recv_window: int = _DEFAULT_RECV_WINDOW,
+        sync_time: bool = True,
     ) -> None:
         self._session = HTTP(
             testnet=testnet,
             api_key=api_key or None,
             api_secret=api_secret or None,
+            recv_window=recv_window,
         )
+        log.debug(
+            "BybitClient initialised (testnet=%s, recv_window=%d ms)",
+            testnet,
+            recv_window,
+        )
+
+        if sync_time:
+            self._apply_time_offset()
+
+    # ------------------------------------------------------------------
+    # Time synchronisation
+    # ------------------------------------------------------------------
+
+    def _apply_time_offset(self) -> None:
+        """
+        Fetch the Bybit server time, compute the clock offset, and patch
+        pybit's timestamp generator with a corrected version.
+
+        The patch is process-wide (module-level function replacement) because
+        pybit calls ``_helpers.generate_timestamp()`` by direct import inside
+        ``_V5HTTPManager._prepare_headers()``.  Replacing the function on the
+        module object is the only way to intercept it without forking pybit.
+
+        If the server-time request fails for any reason, we log a warning and
+        leave the timestamp generator untouched rather than crashing startup.
+        """
+        try:
+            # Record local time immediately before and after the call so we
+            # can estimate the midpoint (reduces one-way latency bias).
+            t_before_ms = int(time.time() * 1_000)
+            response = self._session.get_server_time()  # type: ignore[attr-defined]
+            t_after_ms = int(time.time() * 1_000)
+        except Exception as exc:
+            log.warning(
+                "Could not fetch Bybit server time — running without clock "
+                "correction.  Original error: %s",
+                exc,
+            )
+            return
+
+        # _unwrap will raise BybitAPIError on retCode != 0, but get_server_time
+        # is public so we handle it inline here to keep startup safe.
+        ret_code = response.get("retCode", 0)
+        if ret_code != 0:
+            log.warning(
+                "Bybit server-time endpoint returned retCode=%d (%s) — "
+                "running without clock correction.",
+                ret_code,
+                response.get("retMsg", "unknown"),
+            )
+            return
+
+        # Bybit returns timeSecond as a string of Unix seconds.
+        try:
+            server_time_ms = int(response["result"]["timeSecond"]) * 1_000
+        except (KeyError, ValueError, TypeError) as exc:
+            log.warning(
+                "Unexpected server-time response format — running without "
+                "clock correction.  Error: %s",
+                exc,
+            )
+            return
+
+        # Use the midpoint of the round-trip as the local reference time
+        # to minimise one-sided latency bias.
+        local_midpoint_ms = (t_before_ms + t_after_ms) // 2
+        offset_ms = server_time_ms - local_midpoint_ms
+
+        if abs(offset_ms) < 500:
+            # Offset is negligible — no patch needed.
+            log.debug(
+                "Clock offset is %+d ms — within tolerance, no correction applied.",
+                offset_ms,
+            )
+            return
+
+        log.info(
+            "Clock offset detected: local is %+d ms relative to Bybit server. "
+            "Patching pybit timestamp generator.",
+            offset_ms,
+        )
+
+        # Capture offset_ms in a closure and replace the module-level function.
+        _captured_offset = offset_ms
+
+        def _corrected_timestamp() -> int:
+            return int(time.time() * 1_000) + _captured_offset
+
+        _pybit_helpers.generate_timestamp = _corrected_timestamp  # type: ignore[attr-defined]
+
+        log.debug(
+            "pybit._helpers.generate_timestamp patched with offset %+d ms.",
+            offset_ms,
+        )
+
+    def get_server_time_ms(self) -> int:
+        """
+        Return the current Bybit server time as a Unix millisecond integer.
+
+        Useful for callers that need a reliable "now" reference independent
+        of local clock skew (e.g. computing lookback windows).
+
+        Raises:
+            BybitAPIError: if the request fails or returns a non-zero retCode.
+        """
+        try:
+            response = self._session.get_server_time()  # type: ignore[attr-defined]
+        except Exception as exc:
+            raise BybitAPIError(f"Failed to fetch server time: {exc}") from exc
+
+        self._unwrap(response)
+        try:
+            return int(response["result"]["timeSecond"]) * 1_000
+        except (KeyError, ValueError, TypeError) as exc:
+            raise BybitAPIError(
+                f"Unexpected server-time response format: {exc}"
+            ) from exc
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -140,7 +298,7 @@ class BybitClient:
         Fetch order history for a single symbol.
 
         Args:
-            symbol:       Perpetual futures symbol, e.g. "CCUSDT".
+            symbol:       Perpetual futures symbol, e.g. "ICPUSDT".
             category:     "linear" or "inverse".
             limit:        Max orders per call (Bybit maximum: 50).
             start_time:   Window start as Unix ms timestamp (filters createdTime).
@@ -161,7 +319,7 @@ class BybitClient:
         if end_time is not None:
             kwargs["endTime"] = end_time
         if order_status is not None:
-            kwargs["orderStatus"] = order_status  # ← server-side filter
+            kwargs["orderStatus"] = order_status
 
         try:
             response = self._session.get_order_history(**kwargs)  # type: ignore
