@@ -22,6 +22,7 @@ Automate data collection for external analysis.
 * Exports order history to `data/{SYMBOL}_orderHistory.csv`.
     * *Smart Update:* Automatically detects existing records in the CSV and only adds new "Filled" orders to avoid duplicates.
 * Exports recent trade executions to `data/{SYMBOL}_executions.csv`.
+* Exports open orders data to `data/{SYMBOL}_open_orders.csv`.
 * Generate report with closed and open lots based on LIFO logic including Profit and Loss to `data/{SYMBOL}_lifo_inventory.csv`.
 
 ### 2. Interactive CLI (Testing & Exploration)
@@ -53,6 +54,7 @@ Create a directory named `/data` in the project root. This folder will store you
    * `"order_history"`
    * `"recent_executions"`
    * `"generate_lifo_report"`
+   * `"open_orders"`   
 
 > [!NOTE]
 > These actions are currently functional but are considered "in-progress." Feel free to test which data exports work best for your needs and provide feedback via GitHub Issues.
