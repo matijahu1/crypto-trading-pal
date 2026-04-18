@@ -24,14 +24,13 @@ import json
 import pathlib
 from dataclasses import dataclass, field
 
-
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
 
 _PROJECT_ROOT = pathlib.Path(__file__).parent.parent
-DATA_DIR      = _PROJECT_ROOT / "data"
-CONFIG_PATH   = DATA_DIR / "config.json"
+DATA_DIR = _PROJECT_ROOT / "data"
+CONFIG_PATH = DATA_DIR / "config.json"
 
 
 # ---------------------------------------------------------------------------
@@ -44,13 +43,15 @@ ALL_ACTIONS: list[str] = [
     "trade_history",
     "order_history",
     "recent_executions",
-    "generate_lifo_report"
+    "generate_lifo_report",
+    "open_orders",
 ]
 
 
 # ---------------------------------------------------------------------------
 # Error type
 # ---------------------------------------------------------------------------
+
 
 class ConfigError(Exception):
     """Raised when config.json is missing, invalid JSON, or missing keys."""
@@ -60,16 +61,17 @@ class ConfigError(Exception):
 # Config dataclasses
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class LoggingConfig:
-    enabled:     bool = True
-    level:       str  = "INFO"
+    enabled: bool = True
+    level: str = "INFO"
     log_to_file: bool = False
 
 
 @dataclass
 class PathsConfig:
-    log_file:     str = "bybit_bot.log"
+    log_file: str = "bybit_bot.log"
     exported_dir: str = "data/exported"
     """
     Directory for all exported CSV files.
@@ -81,25 +83,29 @@ class PathsConfig:
 @dataclass
 class ActionsConfig:
     """Controls which batch export steps are executed by main.py."""
+
     enabled: list[str] = field(default_factory=lambda: list(ALL_ACTIONS))
 
 
 @dataclass
 class RequestSettingsConfig:
     """Symbol-level settings used by the symbol-specific batch exports."""
-    symbol:                   str = "BTCUSDT"
-    lookback_days_default:    int = 30
-    recent_executions_limit:  int = 10
+
+    symbol: str = "BTCUSDT"
+    lookback_days_default: int = 30
+    recent_executions_limit: int = 10
 
 
 @dataclass
 class AppConfig:
     """Typed representation of config.json."""
 
-    logging:          LoggingConfig         = field(default_factory=LoggingConfig)
-    paths:            PathsConfig           = field(default_factory=PathsConfig)
-    actions:          ActionsConfig         = field(default_factory=ActionsConfig)
-    request_settings: RequestSettingsConfig = field(default_factory=RequestSettingsConfig)
+    logging: LoggingConfig = field(default_factory=LoggingConfig)
+    paths: PathsConfig = field(default_factory=PathsConfig)
+    actions: ActionsConfig = field(default_factory=ActionsConfig)
+    request_settings: RequestSettingsConfig = field(
+        default_factory=RequestSettingsConfig
+    )
 
     # ------------------------------------------------------------------
     # Convenience properties
@@ -146,6 +152,7 @@ class AppConfig:
 # Loader
 # ---------------------------------------------------------------------------
 
+
 def load_config(config_path: pathlib.Path = CONFIG_PATH) -> AppConfig:
     config_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -171,9 +178,9 @@ def load_config(config_path: pathlib.Path = CONFIG_PATH) -> AppConfig:
 
 def _parse(data: dict, config_path: pathlib.Path) -> AppConfig:
     try:
-        log_raw              = data.get("logging",          {})
-        paths_raw            = data.get("paths",            {})
-        actions_raw          = data.get("actions",          {})
+        log_raw = data.get("logging", {})
+        paths_raw = data.get("paths", {})
+        actions_raw = data.get("actions", {})
         request_settings_raw = data.get("request_settings", {})
 
         if not isinstance(log_raw, dict):
@@ -185,14 +192,16 @@ def _parse(data: dict, config_path: pathlib.Path) -> AppConfig:
         if not isinstance(request_settings_raw, dict):
             raise ConfigError(f"'request_settings' must be an object in {config_path}")
 
-        logging_cfg          = LoggingConfig(
-            enabled=bool(log_raw.get("enabled",     True)),
-            level=str(log_raw.get("level",          "INFO")).upper(),
+        logging_cfg = LoggingConfig(
+            enabled=bool(log_raw.get("enabled", True)),
+            level=str(log_raw.get("level", "INFO")).upper(),
             log_to_file=bool(log_raw.get("log_to_file", False)),
         )
-        paths_cfg            = _parse_paths(paths_raw, config_path)
-        actions_cfg          = _parse_actions(actions_raw, config_path)
-        request_settings_cfg = _parse_request_settings(request_settings_raw, config_path)
+        paths_cfg = _parse_paths(paths_raw, config_path)
+        actions_cfg = _parse_actions(actions_raw, config_path)
+        request_settings_cfg = _parse_request_settings(
+            request_settings_raw, config_path
+        )
 
     except (TypeError, ValueError) as exc:
         raise ConfigError(f"Invalid value in {config_path}: {exc}") from exc
@@ -251,19 +260,25 @@ def _parse_request_settings(
             f"'request_settings.symbol' must be a string, got {type(symbol).__name__!r}"
         )
     if not symbol.strip():
-        raise ConfigError(f"'request_settings.symbol' must not be empty")
+        raise ConfigError("'request_settings.symbol' must not be empty")
 
     lookback_days_default = request_settings_raw.get("lookback_days_default", 30)
-    if not isinstance(lookback_days_default, int) or isinstance(lookback_days_default, bool):
-        raise ConfigError(f"'request_settings.lookback_days_default' must be an integer")
+    if not isinstance(lookback_days_default, int) or isinstance(
+        lookback_days_default, bool
+    ):
+        raise ConfigError("'request_settings.lookback_days_default' must be an integer")
     if lookback_days_default < 1:
-        raise ConfigError(f"'request_settings.lookback_days_default' must be positive")
+        raise ConfigError("'request_settings.lookback_days_default' must be positive")
 
     recent_executions_limit = request_settings_raw.get("recent_executions_limit", 10)
-    if not isinstance(recent_executions_limit, int) or isinstance(recent_executions_limit, bool):
-        raise ConfigError(f"'request_settings.recent_executions_limit' must be an integer")
+    if not isinstance(recent_executions_limit, int) or isinstance(
+        recent_executions_limit, bool
+    ):
+        raise ConfigError(
+            "'request_settings.recent_executions_limit' must be an integer"
+        )
     if recent_executions_limit < 1:
-        raise ConfigError(f"'request_settings.recent_executions_limit' must be positive")
+        raise ConfigError("'request_settings.recent_executions_limit' must be positive")
 
     return RequestSettingsConfig(
         symbol=symbol.strip(),
@@ -275,20 +290,20 @@ def _parse_request_settings(
 def _write_template(config_path: pathlib.Path) -> None:
     template = {
         "logging": {
-            "enabled":     True,
-            "level":       "INFO",
+            "enabled": True,
+            "level": "INFO",
             "log_to_file": False,
         },
         "paths": {
-            "log_file":     "bybit_bot.log",
+            "log_file": "bybit_bot.log",
             "exported_dir": "data/exported",
         },
         "actions": {
             "enabled": list(ALL_ACTIONS),
         },
         "request_settings": {
-            "symbol":                  "BTCUSDT",
-            "lookback_days_default":   30,
+            "symbol": "BTCUSDT",
+            "lookback_days_default": 30,
             "recent_executions_limit": 10,
         },
     }

@@ -52,7 +52,7 @@ class PathProvider:
 
     def __init__(self, base_dir: str | pathlib.Path, symbol: str) -> None:
         self._base_dir = pathlib.Path(base_dir)
-        self._symbol   = symbol.strip().upper()
+        self._symbol = symbol.strip().upper()
 
     # ------------------------------------------------------------------
     # Public accessors
@@ -103,9 +103,12 @@ class PathProvider:
             e.g. ``data/exported/CCUSDT_recent_fills.csv``
         """
         return self._base_dir / f"{self._symbol}_recent_fills.csv"
-    
+
     def lifo_report_path(self) -> pathlib.Path:
         return self._base_dir / f"{self._symbol}_lifo_inventory.csv"
+
+    def open_orders_path(self) -> pathlib.Path:
+        return self._base_dir / f"{self._symbol}_open_orders.csv"
 
     # ------------------------------------------------------------------
     # Symbol-independent paths

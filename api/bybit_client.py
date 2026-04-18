@@ -10,10 +10,9 @@ Change log:
 
 from __future__ import annotations
 
-from typing import Any
-from typing import cast
+from typing import Any, cast
 
-from pybit.unified_trading import HTTP # pyright: ignore[reportMissingTypeStubs]
+from pybit.unified_trading import HTTP  # pyright: ignore[reportMissingTypeStubs]
 
 
 class BybitAPIError(Exception):
@@ -31,9 +30,9 @@ class BybitClient:
 
     def __init__(
         self,
-        testnet:    bool = False,
-        api_key:    str  = "",
-        api_secret: str  = "",
+        testnet: bool = False,
+        api_key: str = "",
+        api_secret: str = "",
     ) -> None:
         self._session = HTTP(
             testnet=testnet,
@@ -59,30 +58,33 @@ class BybitClient:
 
     def get_funding_rate_history(
         self,
-        symbol:   str,
+        symbol: str,
         category: str = "linear",
-        limit:    int = 8,
+        limit: int = 8,
     ) -> list[dict[str, Any]]:
         try:
             response = self._session.get_funding_rate_history(  # type: ignore
-                category=category, symbol=symbol, limit=limit,
+                category=category,
+                symbol=symbol,
+                limit=limit,
             )
         except Exception as exc:
             raise BybitAPIError(f"Failed to fetch funding rate history: {exc}") from exc
-        return self._unwrap(response, symbol)["result"]["list"] # type: ignore
+        return self._unwrap(response, symbol)["result"]["list"]  # type: ignore
 
     def get_instruments_info(
         self,
-        symbol:   str,
+        symbol: str,
         category: str = "linear",
     ) -> dict[str, Any]:
         try:
-            response = self._session.get_instruments_info( # type: ignore
-                category=category, symbol=symbol,
+            response = self._session.get_instruments_info(  # type: ignore
+                category=category,
+                symbol=symbol,
             )
         except Exception as exc:
             raise BybitAPIError(f"Failed to fetch instruments info: {exc}") from exc
-        data  = self._unwrap(response, symbol) # type: ignore
+        data = self._unwrap(response, symbol)  # type: ignore
         items: list[dict[str, Any]] = data["result"]["list"]
         if not items:
             raise BybitAPIError(f"Symbol '{symbol}' not found on Bybit ({category})")
@@ -90,29 +92,29 @@ class BybitClient:
 
     def get_wallet_balance(self, account_type: str = "UNIFIED") -> list[dict[str, Any]]:
         try:
-            response = self._session.get_wallet_balance(accountType=account_type) # type: ignore
+            response = self._session.get_wallet_balance(accountType=account_type)  # type: ignore
         except Exception as exc:
             raise BybitAPIError(f"Failed to fetch wallet balance: {exc}") from exc
-        accounts: list[dict[str, Any]] = self._unwrap(response)["result"]["list"] # type: ignore
+        accounts: list[dict[str, Any]] = self._unwrap(response)["result"]["list"]  # type: ignore
         return accounts[0].get("coin", []) if accounts else []
 
     def get_positions(self, category: str = "linear") -> list[dict[str, Any]]:
         try:
-            response = self._session.get_positions( # type: ignore
+            response = self._session.get_positions(  # type: ignore
                 category=category,
                 settleCoin="USDT" if category == "linear" else "BTC",
             )
         except Exception as exc:
             raise BybitAPIError(f"Failed to fetch positions: {exc}") from exc
-        return self._unwrap(response)["result"]["list"] # type: ignore
+        return self._unwrap(response)["result"]["list"]  # type: ignore
 
     def get_trade_history(
         self,
-        symbol:     str,
-        category:   str      = "linear",
-        limit:      int      = 100,
+        symbol: str,
+        category: str = "linear",
+        limit: int = 100,
         start_time: int | None = None,
-        end_time:   int | None = None,
+        end_time: int | None = None,
     ) -> list[dict[str, Any]]:
         kwargs: dict[str, Any] = dict(category=category, symbol=symbol, limit=limit)
         if start_time is not None:
@@ -120,18 +122,18 @@ class BybitClient:
         if end_time is not None:
             kwargs["endTime"] = end_time
         try:
-            response = self._session.get_executions(**kwargs) # type: ignore
+            response = self._session.get_executions(**kwargs)  # type: ignore
         except Exception as exc:
             raise BybitAPIError(f"Failed to fetch trade history: {exc}") from exc
-        return self._unwrap(response, symbol)["result"]["list"] # type: ignore
+        return self._unwrap(response, symbol)["result"]["list"]  # type: ignore
 
     def get_order_history(
         self,
-        symbol:       str,
-        category:     str      = "linear",
-        limit:        int      = 50,
-        start_time:   int | None = None,
-        end_time:     int | None = None,
+        symbol: str,
+        category: str = "linear",
+        limit: int = 50,
+        start_time: int | None = None,
+        end_time: int | None = None,
         order_status: str | None = None,
     ) -> list[dict[str, Any]]:
         """
@@ -159,21 +161,21 @@ class BybitClient:
         if end_time is not None:
             kwargs["endTime"] = end_time
         if order_status is not None:
-            kwargs["orderStatus"] = order_status   # ← server-side filter
+            kwargs["orderStatus"] = order_status  # ← server-side filter
 
         try:
-            response = self._session.get_order_history(**kwargs) # type: ignore
+            response = self._session.get_order_history(**kwargs)  # type: ignore
         except Exception as exc:
             raise BybitAPIError(f"Failed to fetch order history: {exc}") from exc
-        
-        data = self._unwrap(response, symbol) # type: ignore
-        return cast(list[dict[str, Any]], data["result"]["list"])        
+
+        data = self._unwrap(response, symbol)  # type: ignore
+        return cast(list[dict[str, Any]], data["result"]["list"])
 
     def get_executions(
         self,
-        symbol:    str | None = None,
-        category:  str        = "linear",
-        limit:     int        = 100,
+        symbol: str | None = None,
+        category: str = "linear",
+        limit: int = 100,
         exec_type: str | None = None,
     ) -> list[dict[str, Any]]:
         kwargs: dict[str, Any] = {"category": category, "limit": limit}
@@ -182,8 +184,40 @@ class BybitClient:
         if exec_type:
             kwargs["execType"] = exec_type
         try:
-            response = self._session.get_executions(**kwargs) # type: ignore
+            response = self._session.get_executions(**kwargs)  # type: ignore
         except Exception as exc:
             context = symbol if symbol else "ACCOUNT"
-            raise BybitAPIError(f"Failed to fetch executions for {context}: {exc}") from exc
-        return self._unwrap(response, symbol)["result"]["list"] # type: ignore
+            raise BybitAPIError(
+                f"Failed to fetch executions for {context}: {exc}"
+            ) from exc
+        return self._unwrap(response, symbol)["result"]["list"]  # type: ignore
+
+    def get_open_orders(
+        self,
+        symbol: str,
+        category: str = "linear",
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """
+        Fetch all currently active (unfilled) orders for *symbol*.
+
+        Args:
+            symbol:   Perpetual futures symbol, e.g. "ICPUSDT".
+            category: "linear" or "inverse".
+            limit:    Max orders per call (Bybit maximum: 50).
+
+        Returns:
+            List of order dicts for active orders (status "New",
+            "PartiallyFilled", etc.).  Empty list when none are open.
+
+        Raises:
+            BybitAPIError: On auth failure or any API / network error.
+        """
+        kwargs: dict[str, Any] = dict(category=category, symbol=symbol, limit=limit)
+        try:
+            response = self._session.get_open_orders(**kwargs)  # type: ignore
+        except Exception as exc:
+            raise BybitAPIError(f"Failed to fetch open orders: {exc}") from exc
+
+        data = self._unwrap(response, symbol)
+        return cast(list[dict[str, Any]], data["result"]["list"])

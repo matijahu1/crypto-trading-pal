@@ -8,11 +8,13 @@ The symbol used for trade history and order history actions is
 read from "request_settings.symbol" in data/config.json.
 
 Available action names:
-  "balances"          → data/exported/balance.csv
-  "futures_positions" → data/exported/futures_positions.csv
-  "trade_history"     → data/exported/<symbol>_tradeHistory.csv
-  "order_history"     → data/exported/<symbol>_orderHistory.csv
-  "recent_executions" → data/exported/ACCOUNT_recent_fills.csv
+  "balances"             → data/exported/balance.csv
+  "futures_positions"    → data/exported/futures_positions.csv
+  "trade_history"        → data/exported/<symbol>_tradeHistory.csv
+  "order_history"        → data/exported/<symbol>_orderHistory.csv
+  "recent_executions"    → data/exported/ACCOUNT_recent_fills.csv
+  "open_orders"          → data/exported/<symbol>_openOrders.csv
+  "generate_lifo_report" → data/exported/<symbol>_lifo_inventory.csv
 
 Run:
     python main.py
@@ -65,9 +67,9 @@ def main() -> None:
 
     # 3. Load credentials from .env (never stored in config.json)
     load_dotenv()
-    api_key = os.getenv("BYBIT_API_KEY", "")
+    api_key    = os.getenv("BYBIT_API_KEY", "")
     api_secret = os.getenv("BYBIT_API_SECRET", "")
-    testnet = os.getenv("BYBIT_TESTNET", "false").lower() == "true"
+    testnet    = os.getenv("BYBIT_TESTNET", "false").lower() == "true"
 
     if not api_key or not api_secret:
         log.error("BYBIT_API_KEY and BYBIT_API_SECRET must be set in your .env file")
@@ -108,14 +110,20 @@ def _build_registry(
       4. Register it here.
     """
     return {
-        "balances": lambda: _run_balances(client, paths),
-        "futures_positions": lambda: _run_futures_positions(client, paths),
-        "trade_history": lambda: _run_trade_history(client, paths, lookback_days),
-        "order_history": lambda: _run_order_history(client, paths, lookback_days),
-        "recent_executions": lambda: _run_recent_executions(
-            client, paths, paths.symbol, limit=10
-        ),
-        "generate_lifo_report": lambda: _run_generate_lifo_report(client, paths),
+        "balances":
+            lambda: _run_balances(client, paths),
+        "futures_positions":
+            lambda: _run_futures_positions(client, paths),
+        "trade_history":
+            lambda: _run_trade_history(client, paths, lookback_days),
+        "order_history":
+            lambda: _run_order_history(client, paths, lookback_days),
+        "recent_executions":
+            lambda: _run_recent_executions(client, paths, paths.symbol, limit=10),
+        "open_orders":
+            lambda: _run_open_orders(client, paths),
+        "generate_lifo_report":
+            lambda: _run_generate_lifo_report(client, paths),
     }
 
 
@@ -145,7 +153,7 @@ def _run_balances(client: BybitClient, paths: PathProvider) -> None:
     output_path = paths.balance_path()
     log.info("Fetching wallet balances → %s", output_path)
 
-    service = BalanceService(client=client, account_type="UNIFIED")
+    service  = BalanceService(client=client, account_type="UNIFIED")
     exporter = BalanceExporter(output_path)
 
     try:
@@ -168,7 +176,7 @@ def _run_futures_positions(client: BybitClient, paths: PathProvider) -> None:
     output_path = paths.futures_positions_path()
     log.info("Fetching futures positions → %s", output_path)
 
-    service = FuturesPositionService(client=client, category="linear")
+    service  = FuturesPositionService(client=client, category="linear")
     exporter = FuturesPositionExporter(output_path)
 
     try:
@@ -191,7 +199,7 @@ def _run_trade_history(
     output_path = paths.trade_history_path()
     log.info("Fetching trade history for %s → %s", paths.symbol, output_path)
 
-    service = TradeHistoryService(
+    service  = TradeHistoryService(
         client=client, category="linear", lookback_days=lookback_days
     )
     exporter = TradeHistoryExporter(output_path)
@@ -228,18 +236,11 @@ def _run_order_history(
       4. SORT      — Merger returns the combined list sorted by updated_ts DESC.
       5. OVERWRITE — OrderHistoryExporter rewrites the full CSV with the merged,
                      sorted list.
-
-    The output path is obtained from PathProvider *before* the API call so
-    that a future "skip if up-to-date" check can be inserted at step 1
-    without restructuring this function.
     """
     output_path = paths.order_history_path()
     log.info("Processing filled order history for %s → %s", paths.symbol, output_path)
 
-    # ── 1. Initialise merger — loads existing CSV rows if the file exists ─────
-    merger = OrderHistoryMerger(output_path)
-
-    # ── 2. Fetch new "Filled" orders from the Bybit API ──────────────────────
+    merger  = OrderHistoryMerger(output_path)
     service = OrderHistoryService(
         client=client,
         category="linear",
@@ -251,26 +252,22 @@ def _run_order_history(
         log.error("Could not fetch order history for %s: %s", paths.symbol, exc)
         return
 
-    # ── 3 & 4. Merge + sort (dedup by order_id, sorted by updated_ts DESC) ───
     combined = merger.merge(fresh.orders)
 
     if not combined:
         log.warning(
             "No filled orders found for %s — %s was not written",
-            paths.symbol,
-            output_path,
+            paths.symbol, output_path,
         )
         return
 
-    # ── 5. Overwrite CSV with the complete, deduplicated, sorted list ─────────
     exporter = OrderHistoryExporter(output_path)
     path = exporter.export(
         OrderHistory(symbol=paths.symbol, category="linear", orders=combined)
     )
     log.info(
         "Exported %d filled order(s) to %s (%d from API, %d already on disk)",
-        len(combined),
-        path,
+        len(combined), path,
         len(fresh.orders),
         max(0, len(combined) - len(fresh.orders)),
     )
@@ -286,12 +283,12 @@ def _run_recent_executions(
     from services.recent_executions import RecentExecutionService
 
     output_path = paths.recent_fills_path()
-    context = symbol if symbol else "ACCOUNT-WIDE"
+    context     = symbol if symbol else "ACCOUNT-WIDE"
     log.info(
         "Fetching recent fills for %s (limit: %d) → %s", context, limit, output_path
     )
 
-    service = RecentExecutionService(client=client, category="linear")
+    service  = RecentExecutionService(client=client, category="linear")
     exporter = RecentExecutionsExporter(output_path)
 
     try:
@@ -310,38 +307,68 @@ def _run_recent_executions(
     log.info("Exported %d recent execution(s) to %s", len(history.executions), path)
 
 
+def _run_open_orders(client: BybitClient, paths: PathProvider) -> None:
+    """
+    Fetch all currently active orders for the configured symbol and export
+    them to ``{SYMBOL}_openOrders.csv``.
+
+    Behaviour when no orders are found:
+        An empty CSV (headers only) is written and an info message is logged.
+        This keeps the output directory's file set consistent — downstream
+        tools can always rely on the file being present after a successful run.
+    """
+    from exporters.open_orders_exporter import OpenOrdersExporter
+    from services.open_orders import OpenOrderService
+
+    output_path = paths.open_orders_path()
+    log.info("Fetching open orders for %s → %s", paths.symbol, output_path)
+
+    service  = OpenOrderService(client=client, category="linear")
+    exporter = OpenOrdersExporter(output_path)
+
+    try:
+        snapshot = service.get_open_orders(paths.symbol)
+    except BybitAPIError as exc:
+        log.error("Could not fetch open orders for %s: %s", paths.symbol, exc)
+        return
+
+    if not snapshot.orders:
+        log.info(
+            "No open orders found for %s — writing empty CSV to %s",
+            paths.symbol, output_path,
+        )
+
+    path = exporter.export(snapshot)
+    log.info(
+        "Exported %d open order(s) to %s",
+        len(snapshot.orders), path,
+    )
+
+
 def _run_generate_lifo_report(client: BybitClient, paths: PathProvider) -> None:
     """
     Generate a LIFO inventory report from the existing order history CSV.
 
     Input dependency:
         ``{SYMBOL}_orderHistory.csv`` in the configured export directory.
-
-    Strategy:
-        1. Resolve the input path via PathProvider.
-        2. Validate the file exists — log a clear error and return if not.
-        3. Run LifoReportService to process all orders with LIFO matching.
-        4. Export the result to ``{SYMBOL}_lifo_inventory.csv``.
+        Run the ``order_history`` action first if the file is absent.
     """
     from exporters.lifo_report_exporter import LifoReportExporter
     from services.lifo_report import LifoReportService
 
-    input_path = paths.order_history_path()
+    input_path  = paths.order_history_path()
     output_path = paths.lifo_report_path()
 
     log.info("Generating LIFO inventory report for %s → %s", paths.symbol, output_path)
 
-    # ── 1. Validate input ────────────────────────────────────────────────────
     if not input_path.exists():
         log.error(
             "Error: Order history file not found for %s. "
             "Please run 'order_history' first. (Expected: %s)",
-            paths.symbol,
-            input_path,
+            paths.symbol, input_path,
         )
         return
 
-    # ── 2. Run LIFO engine ───────────────────────────────────────────────────
     service = LifoReportService(input_path)
     try:
         records = service.generate()
@@ -352,29 +379,23 @@ def _run_generate_lifo_report(client: BybitClient, paths: PathProvider) -> None:
     if not records:
         log.warning(
             "No lot records produced for %s — %s was not written",
-            paths.symbol,
-            output_path,
+            paths.symbol, output_path,
         )
         return
 
-    # ── 3. Export ────────────────────────────────────────────────────────────
     exporter = LifoReportExporter(output_path)
     path = exporter.export(records)
 
-    open_count = sum(1 for r in records if r.status == "OPEN")
+    open_count    = sum(1 for r in records if r.status == "OPEN")
     partial_count = sum(1 for r in records if r.status == "PARTIAL")
-    closed_count = sum(1 for r in records if r.status == "CLOSED")
-    total_pnl = sum(r.realized_pnl for r in records)
+    closed_count  = sum(1 for r in records if r.status == "CLOSED")
+    total_pnl     = sum(r.realized_pnl for r in records)
 
     log.info(
         "Exported %d lot(s) to %s — OPEN: %d, PARTIAL: %d, CLOSED: %d | "
         "Total realized PnL: %.4f",
-        len(records),
-        path,
-        open_count,
-        partial_count,
-        closed_count,
-        total_pnl,
+        len(records), path,
+        open_count, partial_count, closed_count, total_pnl,
     )
 
 
