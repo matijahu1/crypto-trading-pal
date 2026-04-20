@@ -8,6 +8,13 @@ Responsibilities:
 
 Output path is dynamic: data/<SYMBOL>_tradeHistory.csv
 Use the factory function make_exporter(symbol) to build the correct instance.
+
+Change log:
+  - Added "trading_fee" column after "exec_type".
+    Populated from Trade.trading_fee (Decimal); positive = fee charged,
+    negative = rebate received.
+  - price and size are now Decimal in the Trade dataclass; CSV serialisation
+    is unchanged (str() on a Decimal produces a clean decimal string).
 """
 
 from __future__ import annotations
@@ -25,6 +32,7 @@ HEADERS = [
     "price",
     "size",
     "exec_type",
+    "trading_fee",
     "date",
     "time",
 ]
@@ -62,7 +70,16 @@ class TradeHistoryExporter(CsvExporter):
 
     def rows(self, data: TradeHistory) -> list[list[Any]]:
         return [
-            [t.trade_id, t.symbol, t.side, t.price, t.size,
-             t.exec_type, t.date, t.time]
+            [
+                t.trade_id,
+                t.symbol,
+                t.side,
+                t.price,
+                t.size,
+                t.exec_type,
+                t.trading_fee,
+                t.date,
+                t.time,
+            ]
             for t in data.trades
         ]

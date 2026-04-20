@@ -7,6 +7,14 @@ Responsibilities:
   - Map API field names to clean internal names
   - Convert millisecond timestamps to human-readable date and time strings
   - Return structured result objects — NOT formatted strings
+
+Change log:
+  - Trade.price, Trade.size, and Trade.trading_fee are now Decimal (was float).
+    Decimal avoids floating-point rounding errors in financial calculations and
+    preserves the exact precision returned by the Bybit API.
+  - Trade gains a new field: trading_fee (Decimal).
+    Populated from the ``execFee`` field in the API response.
+    Positive values represent fees charged; negative values represent rebates.
 """
 
 from __future__ import annotations
@@ -14,6 +22,7 @@ from __future__ import annotations
 import datetime
 import logging
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from typing import Any, Protocol
 
 from utils.time_utils import ms_timestamp_to_date_time
@@ -43,6 +52,8 @@ _LOOKBACK_DAYS_FALLBACK = 30
 # Tests that need a stable value should pass lookback_days=30 explicitly.
 LOOKBACK_DAYS = _LOOKBACK_DAYS_FALLBACK
 
+_ZERO = Decimal("0")
+
 
 # ---------------------------------------------------------------------------
 # Protocol — decouples the service from the concrete client (mockable in tests)
@@ -69,23 +80,24 @@ class TradeHistoryClientProtocol(Protocol):
 class Trade:
     """A single executed trade (fill)."""
 
-    trade_id: str    # unique execution ID
-    symbol: str
-    side: str        # "Buy" or "Sell"
-    price: float     # execution price
-    size: float      # executed quantity
-    exec_type: str   # execution type, e.g. "Trade", "Funding", "BustTrade"
-    date: str        # UTC date of execution, e.g. "2023-11-14"
-    time: str        # UTC time of execution, e.g. "22:13:20"
+    trade_id:    str      # unique execution ID
+    symbol:      str
+    side:        str      # "Buy" or "Sell"
+    price:       Decimal  # execution price (exact decimal, no float rounding)
+    size:        Decimal  # executed quantity (exact decimal)
+    exec_type:   str      # execution type, e.g. "Trade", "Funding", "BustTrade"
+    trading_fee: Decimal  # fee charged (positive) or rebate received (negative)
+    date:        str      # UTC date of execution, e.g. "2023-11-14"
+    time:        str      # UTC time of execution, e.g. "22:13:20"
 
 
 @dataclass
 class TradeHistory:
     """A batch of trades for one symbol."""
 
-    symbol: str
+    symbol:   str
     category: str
-    trades: list[Trade]   # newest-first across the full lookback period
+    trades:   list[Trade]   # newest-first across the full lookback period
 
 
 # ---------------------------------------------------------------------------
@@ -243,9 +255,10 @@ class TradeHistoryService:
                         trade_id=exec_id,
                         symbol=entry.get("symbol", symbol),
                         side=entry.get("side", ""),
-                        price=float(entry.get("execPrice", 0) or 0),
-                        size=float(entry.get("execQty", 0) or 0),
+                        price=_to_decimal(entry.get("execPrice")),
+                        size=_to_decimal(entry.get("execQty")),
                         exec_type=entry.get("execType", ""),
+                        trading_fee=_to_decimal(entry.get("execFee")),
                         date=ms_timestamp_to_date_time(str(exec_time))[0] if exec_time else "",
                         time=ms_timestamp_to_date_time(str(exec_time))[1] if exec_time else "",
                     ))
@@ -284,3 +297,18 @@ class TradeHistoryService:
 def _now_ms() -> int:
     """Return the current UTC time as a Unix millisecond timestamp."""
     return int(datetime.datetime.now(tz=datetime.timezone.utc).timestamp() * 1000)
+
+
+def _to_decimal(value: Any) -> Decimal:
+    """
+    Safely convert an API value to Decimal.
+
+    Bybit returns numeric fields as strings (e.g. ``"30.5"``).
+    Returns Decimal("0") for None, empty string, or any unparseable value.
+    """
+    if value is None:
+        return _ZERO
+    try:
+        return Decimal(str(value))
+    except InvalidOperation:
+        return _ZERO
