@@ -4,29 +4,44 @@ the ms_timestamp_to_date_time helper.
 
 The API client is replaced by a plain stub — no real HTTP calls,
 no unittest.mock. Each test follows arrange → act → assert.
+
+Change log:
+  - raw() helper gains an optional ``exec_fee`` parameter (default "0.05").
+  - _make_history() and Trade construction include the new trading_fee field.
+  - SAMPLE_HISTORY updated with trading_fee values.
+  - TestTradeHistoryService: float assertions replaced by Decimal assertions;
+    new test for trading_fee mapping; missing-fee defaults to Decimal("0").
+  - TestTradeHistoryExporter: column count updated 8 → 9; header list updated;
+    test_correct_values_first_row includes trading_fee; funding column index
+    updated from 5 → 6; test_file_is_overwritten_not_appended passes fee arg.
 """
 
 import csv
 import pathlib
+from decimal import Decimal
 
 import pytest
 
-from utils.time_utils import ms_timestamp_to_date_time
-from services.trade_history import (
-    TradeHistoryService, TradeHistory, Trade,
-    LOOKBACK_DAYS, MAX_WINDOW_DAYS, _MS_PER_DAY,
-)
+from api.bybit_client import BybitAPIError
 from exporters.trade_history_exporter import (
+    HEADERS,
     TradeHistoryExporter,
     make_exporter,
-    HEADERS,
 )
-from api.bybit_client import BybitAPIError
-
+from services.trade_history import (
+    _MS_PER_DAY,
+    LOOKBACK_DAYS,
+    MAX_WINDOW_DAYS,
+    Trade,
+    TradeHistory,
+    TradeHistoryService,
+)
+from utils.time_utils import ms_timestamp_to_date_time
 
 # ---------------------------------------------------------------------------
 # Stub clients
 # ---------------------------------------------------------------------------
+
 
 class StubTradeClient:
     """
@@ -56,12 +71,12 @@ class StubTradeClient:
         start_time: int | None = None,
         end_time: int | None = None,
     ) -> list[dict]:
-        self.last_symbol     = symbol
-        self.last_category   = category
-        self.last_limit      = limit
+        self.last_symbol = symbol
+        self.last_category = category
+        self.last_limit = limit
         self.last_start_time = start_time
-        self.last_end_time   = end_time
-        self.call_count     += 1
+        self.last_end_time = end_time
+        self.call_count += 1
         if self._raise_error:
             raise BybitAPIError("Bybit API error [10003]: Invalid api_key")
         return self._trades if self.call_count == 1 else []
@@ -75,7 +90,7 @@ class SequentialStubClient:
 
     def __init__(self, pages: list[list[dict]]) -> None:
         self._pages = list(pages)
-        self._idx   = 0
+        self._idx = 0
         self.call_log: list[tuple[int | None, int | None]] = []
 
     def get_trade_history(
@@ -98,28 +113,39 @@ class SequentialStubClient:
 # Helpers
 # ---------------------------------------------------------------------------
 
-NOW_FIXED    = 1_700_000_000_000   # 2023-11-14 22:13:20 UTC
-WINDOW_MS    = MAX_WINDOW_DAYS * _MS_PER_DAY
+NOW_FIXED = 1_700_000_000_000  # 2023-11-14 22:13:20 UTC
+WINDOW_MS = MAX_WINDOW_DAYS * _MS_PER_DAY
 GLOBAL_START = NOW_FIXED - LOOKBACK_DAYS * _MS_PER_DAY
 
 # Exact window boundaries produced by the loop (derived from trace run):
-W1_START = 1_699_395_200_000;  W1_END = 1_700_000_000_000
-W2_START = 1_698_790_399_999;  W2_END = 1_699_395_199_999
-W3_START = 1_698_185_599_998;  W3_END = 1_698_790_399_998
-W4_START = 1_697_580_799_997;  W4_END = 1_698_185_599_997
-W5_START = 1_697_408_000_000;  W5_END = 1_697_580_799_996  # clamped
+W1_START = 1_699_395_200_000
+W1_END = 1_700_000_000_000
+W2_START = 1_698_790_399_999
+W2_END = 1_699_395_199_999
+W3_START = 1_698_185_599_998
+W3_END = 1_698_790_399_998
+W4_START = 1_697_580_799_997
+W4_END = 1_698_185_599_997
+W5_START = 1_697_408_000_000
+W5_END = 1_697_580_799_996  # clamped
 
 
-def raw(exec_id: str, exec_time: int, exec_type: str = "Trade") -> dict:
-    """Minimal raw trade dict for tests."""
+def raw(
+    exec_id: str,
+    exec_time: int,
+    exec_type: str = "Trade",
+    exec_fee: str = "0.05",
+) -> dict:
+    """Minimal raw trade dict for tests, including execFee."""
     return {
-        "execId":    exec_id,
-        "symbol":    "ZECUSDT",
-        "side":      "Buy",
+        "execId": exec_id,
+        "symbol": "ZECUSDT",
+        "side": "Buy",
         "execPrice": "30.0",
-        "execQty":   "1",
-        "execType":  exec_type,
-        "execTime":  str(exec_time),
+        "execQty": "1",
+        "execType": exec_type,
+        "execTime": str(exec_time),
+        "execFee": exec_fee,
     }
 
 
@@ -131,8 +157,8 @@ def read_csv(path: pathlib.Path) -> list[list[str]]:
 # ms_timestamp_to_date_time tests
 # ===========================================================================
 
-class TestMsTimestampToDateTime:
 
+class TestMsTimestampToDateTime:
     def test_returns_tuple_of_two_strings(self):
         result = ms_timestamp_to_date_time("1700000000000")
         assert isinstance(result, tuple) and len(result) == 2
@@ -173,30 +199,38 @@ class TestMsTimestampToDateTime:
 # TradeHistoryService — field mapping
 # ===========================================================================
 
+
 class TestTradeHistoryService:
     """Field-level tests. StubTradeClient returns trades on call 1, [] on call 2+."""
 
     @pytest.fixture(autouse=True)
     def freeze_time(self, monkeypatch):
         import services.trade_history as m
+
         monkeypatch.setattr(m, "_now_ms", lambda: NOW_FIXED)
 
     TRADES = [
-        raw("exec-001", W1_END - 1_000, "Trade"),
-        raw("exec-002", W1_END - 2_000, "Trade"),
-        raw("exec-003", W1_END - 3_000, "Funding"),
+        raw("exec-001", W1_END - 1_000, "Trade", "0.05"),
+        raw("exec-002", W1_END - 2_000, "Trade", "0.03"),
+        raw("exec-003", W1_END - 3_000, "Funding", "-0.01"),
     ]
 
     def test_returns_trade_history_dataclass(self):
-        result = TradeHistoryService(StubTradeClient(self.TRADES)).get_history("ZECUSDT")
+        result = TradeHistoryService(StubTradeClient(self.TRADES)).get_history(
+            "ZECUSDT"
+        )
         assert isinstance(result, TradeHistory)
 
     def test_trades_are_trade_instances(self):
-        result = TradeHistoryService(StubTradeClient(self.TRADES)).get_history("ZECUSDT")
+        result = TradeHistoryService(StubTradeClient(self.TRADES)).get_history(
+            "ZECUSDT"
+        )
         assert all(isinstance(t, Trade) for t in result.trades)
 
     def test_symbol_is_uppercased(self):
-        result = TradeHistoryService(StubTradeClient(self.TRADES)).get_history("zecusdt")
+        result = TradeHistoryService(StubTradeClient(self.TRADES)).get_history(
+            "zecusdt"
+        )
         assert result.symbol == "ZECUSDT"
 
     def test_symbol_uppercased_before_passing_to_client(self):
@@ -210,47 +244,99 @@ class TestTradeHistoryService:
         assert client.last_category == "inverse"
 
     def test_category_preserved_in_result(self):
-        result = TradeHistoryService(StubTradeClient(self.TRADES), category="inverse").get_history("ZECUSDT")
+        result = TradeHistoryService(
+            StubTradeClient(self.TRADES), category="inverse"
+        ).get_history("ZECUSDT")
         assert result.category == "inverse"
 
     def test_correct_number_of_trades_returned(self):
-        result = TradeHistoryService(StubTradeClient(self.TRADES)).get_history("ZECUSDT")
+        result = TradeHistoryService(StubTradeClient(self.TRADES)).get_history(
+            "ZECUSDT"
+        )
         assert len(result.trades) == 3
 
     def test_trade_id_mapped_from_exec_id(self):
-        result = TradeHistoryService(StubTradeClient(self.TRADES)).get_history("ZECUSDT")
+        result = TradeHistoryService(StubTradeClient(self.TRADES)).get_history(
+            "ZECUSDT"
+        )
         assert result.trades[0].trade_id == "exec-001"
 
     def test_side_mapped(self):
-        result = TradeHistoryService(StubTradeClient(self.TRADES)).get_history("ZECUSDT")
+        result = TradeHistoryService(StubTradeClient(self.TRADES)).get_history(
+            "ZECUSDT"
+        )
         assert result.trades[0].side == "Buy"
 
-    def test_price_mapped_as_float(self):
-        result = TradeHistoryService(StubTradeClient(self.TRADES)).get_history("ZECUSDT")
-        assert isinstance(result.trades[0].price, float)
-        assert result.trades[0].price == pytest.approx(30.0)
+    def test_price_mapped_as_decimal(self):
+        result = TradeHistoryService(StubTradeClient(self.TRADES)).get_history(
+            "ZECUSDT"
+        )
+        assert isinstance(result.trades[0].price, Decimal)
+        assert result.trades[0].price == Decimal("30.0")
 
-    def test_size_mapped_as_float(self):
-        result = TradeHistoryService(StubTradeClient(self.TRADES)).get_history("ZECUSDT")
-        assert isinstance(result.trades[0].size, float)
-        assert result.trades[0].size == pytest.approx(1.0)
+    def test_size_mapped_as_decimal(self):
+        result = TradeHistoryService(StubTradeClient(self.TRADES)).get_history(
+            "ZECUSDT"
+        )
+        assert isinstance(result.trades[0].size, Decimal)
+        assert result.trades[0].size == Decimal("1")
+
+    def test_trading_fee_mapped_as_decimal(self):
+        result = TradeHistoryService(StubTradeClient(self.TRADES)).get_history(
+            "ZECUSDT"
+        )
+        assert isinstance(result.trades[0].trading_fee, Decimal)
+        assert result.trades[0].trading_fee == Decimal("0.05")
+
+    def test_trading_fee_negative_for_rebate(self):
+        # exec-003 has execFee "-0.01" (a funding rebate)
+        result = TradeHistoryService(StubTradeClient(self.TRADES)).get_history(
+            "ZECUSDT"
+        )
+        assert result.trades[2].trading_fee == Decimal("-0.01")
+
+    def test_trading_fee_missing_defaults_to_zero(self):
+        no_fee = [
+            {
+                "execId": "x",
+                "side": "Buy",
+                "execPrice": "1",
+                "execQty": "1",
+                "execTime": str(W1_END - 1_000),
+            }
+        ]
+        result = TradeHistoryService(StubTradeClient(no_fee)).get_history("ZECUSDT")
+        assert result.trades[0].trading_fee == Decimal("0")
 
     def test_exec_type_trade_mapped(self):
-        result = TradeHistoryService(StubTradeClient(self.TRADES)).get_history("ZECUSDT")
+        result = TradeHistoryService(StubTradeClient(self.TRADES)).get_history(
+            "ZECUSDT"
+        )
         assert result.trades[0].exec_type == "Trade"
 
     def test_exec_type_funding_mapped(self):
-        result = TradeHistoryService(StubTradeClient(self.TRADES)).get_history("ZECUSDT")
+        result = TradeHistoryService(StubTradeClient(self.TRADES)).get_history(
+            "ZECUSDT"
+        )
         assert result.trades[2].exec_type == "Funding"
 
     def test_exec_type_missing_defaults_to_empty_string(self):
-        no_type = [{"execId": "x", "side": "Buy", "execPrice": "1",
-                    "execQty": "1", "execTime": str(W1_END - 1_000)}]
+        no_type = [
+            {
+                "execId": "x",
+                "side": "Buy",
+                "execPrice": "1",
+                "execQty": "1",
+                "execTime": str(W1_END - 1_000),
+            }
+        ]
         result = TradeHistoryService(StubTradeClient(no_type)).get_history("ZECUSDT")
         assert result.trades[0].exec_type == ""
 
     def test_date_converted_from_exec_time(self):
-        result = TradeHistoryService(StubTradeClient(self.TRADES)).get_history("ZECUSDT")
+        result = TradeHistoryService(StubTradeClient(self.TRADES)).get_history(
+            "ZECUSDT"
+        )
         assert result.trades[0].date == "2023-11-14"
 
     def test_missing_exec_time_gives_empty_date_and_time(self):
@@ -269,16 +355,21 @@ class TestTradeHistoryService:
 
     def test_api_error_is_propagated(self):
         with pytest.raises(BybitAPIError):
-            TradeHistoryService(StubTradeClient(raise_error=True)).get_history("ZECUSDT")
+            TradeHistoryService(StubTradeClient(raise_error=True)).get_history(
+                "ZECUSDT"
+            )
 
     def test_api_error_message_is_preserved(self):
         with pytest.raises(BybitAPIError, match="10003"):
-            TradeHistoryService(StubTradeClient(raise_error=True)).get_history("ZECUSDT")
+            TradeHistoryService(StubTradeClient(raise_error=True)).get_history(
+                "ZECUSDT"
+            )
 
 
 # ===========================================================================
 # TradeHistoryService — 7-day window iteration
 # ===========================================================================
+
 
 class TestTradeHistoryWindowIteration:
     """
@@ -298,6 +389,7 @@ class TestTradeHistoryWindowIteration:
     @pytest.fixture(autouse=True)
     def freeze_time(self, monkeypatch):
         import services.trade_history as m
+
         monkeypatch.setattr(m, "_now_ms", lambda: NOW_FIXED)
 
     # -----------------------------------------------------------------------
@@ -306,17 +398,21 @@ class TestTradeHistoryWindowIteration:
 
     def test_first_window_end_is_now(self):
         # Arrange — one trade in W1, everything else returns []
-        client = SequentialStubClient(pages=[
-            [raw("t1", W1_END - 1_000)],  # W1 page
-        ])
+        client = SequentialStubClient(
+            pages=[
+                [raw("t1", W1_END - 1_000)],  # W1 page
+            ]
+        )
         TradeHistoryService(client).get_history("ZECUSDT")
 
         assert client.call_log[0][1] == NOW_FIXED
 
     def test_first_window_start_is_now_minus_7_days(self):
-        client = SequentialStubClient(pages=[
-            [raw("t1", W1_END - 1_000)],
-        ])
+        client = SequentialStubClient(
+            pages=[
+                [raw("t1", W1_END - 1_000)],
+            ]
+        )
         TradeHistoryService(client).get_history("ZECUSDT")
 
         assert client.call_log[0][0] == W1_START
@@ -324,11 +420,13 @@ class TestTradeHistoryWindowIteration:
     def test_second_window_end_is_w1_start_minus_one(self):
         # After W1 is fully paged through, W2 should start with end=W1_START-1.
         # We provide enough pages to cover W1's inner loop (page + empty) and W2.
-        client = SequentialStubClient(pages=[
-            [raw("t1", W1_END - 1_000)],  # W1 page 1 (inner loop fetches t1)
-            [],                            # W1 page 2 (inner loop ends)
-            [raw("t2", W2_END - 1_000)],  # W2 page 1
-        ])
+        client = SequentialStubClient(
+            pages=[
+                [raw("t1", W1_END - 1_000)],  # W1 page 1 (inner loop fetches t1)
+                [],  # W1 page 2 (inner loop ends)
+                [raw("t2", W2_END - 1_000)],  # W2 page 1
+            ]
+        )
         TradeHistoryService(client).get_history("ZECUSDT")
 
         # The first W2 call must have end_time == W1_START - 1
@@ -337,9 +435,9 @@ class TestTradeHistoryWindowIteration:
 
     def test_last_window_start_is_clamped_to_global_start(self):
         # Feed 5 pages (one per window) so all windows are visited
-        client = SequentialStubClient(pages=[
-            [raw(f"t{i}", W1_END - i * 1_000)] for i in range(1, 6)
-        ])
+        client = SequentialStubClient(
+            pages=[[raw(f"t{i}", W1_END - i * 1_000)] for i in range(1, 6)]
+        )
         TradeHistoryService(client).get_history("ZECUSDT")
 
         starts = [s for s, _ in client.call_log]
@@ -347,9 +445,9 @@ class TestTradeHistoryWindowIteration:
 
     def test_window_span_does_not_exceed_7_days(self):
         # Every API call must cover <= 7 days
-        client = SequentialStubClient(pages=[
-            [raw(f"t{i}", W1_END - i * 1_000)] for i in range(1, 6)
-        ])
+        client = SequentialStubClient(
+            pages=[[raw(f"t{i}", W1_END - i * 1_000)] for i in range(1, 6)]
+        )
         TradeHistoryService(client).get_history("ZECUSDT")
 
         for start, end in client.call_log:
@@ -362,20 +460,24 @@ class TestTradeHistoryWindowIteration:
 
     def test_empty_window_does_not_stop_outer_loop(self):
         # W1 is empty ([] on call 1), W2 has a trade (call 2)
-        client = SequentialStubClient(pages=[
-            [],                             # W1: empty → outer loop continues
-            [raw("t2", W2_END - 1_000)],   # W2: has a trade
-        ])
+        client = SequentialStubClient(
+            pages=[
+                [],  # W1: empty → outer loop continues
+                [raw("t2", W2_END - 1_000)],  # W2: has a trade
+            ]
+        )
         result = TradeHistoryService(client).get_history("ZECUSDT")
 
         assert any(t.trade_id == "t2" for t in result.trades)
 
     def test_two_empty_windows_followed_by_one_with_trades(self):
-        client = SequentialStubClient(pages=[
-            [],                             # W1 empty
-            [],                             # W2 empty
-            [raw("t3", W3_END - 1_000)],   # W3 has trades
-        ])
+        client = SequentialStubClient(
+            pages=[
+                [],  # W1 empty
+                [],  # W2 empty
+                [raw("t3", W3_END - 1_000)],  # W3 has trades
+            ]
+        )
         result = TradeHistoryService(client).get_history("ZECUSDT")
 
         assert any(t.trade_id == "t3" for t in result.trades)
@@ -399,30 +501,34 @@ class TestTradeHistoryWindowIteration:
     # -----------------------------------------------------------------------
 
     def test_trades_from_two_windows_are_combined(self):
-        client = SequentialStubClient(pages=[
-            [raw("t1", W1_END - 1_000)],
-            [raw("t2", W2_END - 1_000)],
-        ])
+        client = SequentialStubClient(
+            pages=[
+                [raw("t1", W1_END - 1_000)],
+                [raw("t2", W2_END - 1_000)],
+            ]
+        )
         result = TradeHistoryService(client).get_history("ZECUSDT")
 
         assert len(result.trades) == 2
         assert {t.trade_id for t in result.trades} == {"t1", "t2"}
 
     def test_trades_from_all_five_windows_are_combined(self):
-        client = SequentialStubClient(pages=[
-            [raw(f"t{i}", W1_END - i * 1_000)] for i in range(1, 6)
-        ])
+        client = SequentialStubClient(
+            pages=[[raw(f"t{i}", W1_END - i * 1_000)] for i in range(1, 6)]
+        )
         result = TradeHistoryService(client).get_history("ZECUSDT")
 
         assert len(result.trades) == 5
 
     def test_gap_in_trading_activity_handled(self):
         # W1 and W3 have trades; W2 is empty (trading gap) — all must be collected
-        client = SequentialStubClient(pages=[
-            [raw("t1", W1_END - 1_000)],   # W1
-            [],                             # W2: gap in activity
-            [raw("t3", W3_END - 1_000)],   # W3
-        ])
+        client = SequentialStubClient(
+            pages=[
+                [raw("t1", W1_END - 1_000)],  # W1
+                [],  # W2: gap in activity
+                [raw("t3", W3_END - 1_000)],  # W3
+            ]
+        )
         result = TradeHistoryService(client).get_history("ZECUSDT")
 
         ids = {t.trade_id for t in result.trades}
@@ -435,21 +541,25 @@ class TestTradeHistoryWindowIteration:
     def test_multiple_pages_within_one_window_are_combined(self):
         # W1 has two pages: service should fetch both before moving to W2
         T1, T2, T3 = W1_END - 1_000, W1_END - 2_000, W1_END - 3_000
-        client = SequentialStubClient(pages=[
-            [raw("t1", T1), raw("t2", T2)],   # W1 page 1
-            [raw("t3", T3)],                   # W1 page 2 (inner loop)
-            # W2 and beyond return [] implicitly
-        ])
+        client = SequentialStubClient(
+            pages=[
+                [raw("t1", T1), raw("t2", T2)],  # W1 page 1
+                [raw("t3", T3)],  # W1 page 2 (inner loop)
+                # W2 and beyond return [] implicitly
+            ]
+        )
         result = TradeHistoryService(client).get_history("ZECUSDT")
 
         assert len(result.trades) == 3
 
     def test_inner_page_end_time_advances_to_oldest_minus_one(self):
         T1, T2 = W1_END - 1_000, W1_END - 50_000
-        client = SequentialStubClient(pages=[
-            [raw("t1", T1), raw("t2", T2)],   # W1 page 1 — T2 is oldest
-            [],                                # W1 page 2 — empty → window done
-        ])
+        client = SequentialStubClient(
+            pages=[
+                [raw("t1", T1), raw("t2", T2)],  # W1 page 1 — T2 is oldest
+                [],  # W1 page 2 — empty → window done
+            ]
+        )
         TradeHistoryService(client).get_history("ZECUSDT")
 
         # Second call should have end_time = T2 - 1
@@ -461,10 +571,12 @@ class TestTradeHistoryWindowIteration:
 
     def test_duplicate_trade_id_across_windows_appears_once(self):
         # "dup" appears in both W1 and W2 (boundary overlap)
-        client = SequentialStubClient(pages=[
-            [raw("dup", W1_END - 1_000), raw("t1", W1_END - 2_000)],
-            [raw("dup", W1_END - 1_000), raw("t2", W2_END - 1_000)],
-        ])
+        client = SequentialStubClient(
+            pages=[
+                [raw("dup", W1_END - 1_000), raw("t1", W1_END - 2_000)],
+                [raw("dup", W1_END - 1_000), raw("t2", W2_END - 1_000)],
+            ]
+        )
         result = TradeHistoryService(client).get_history("ZECUSDT")
 
         ids = [t.trade_id for t in result.trades]
@@ -475,17 +587,21 @@ class TestTradeHistoryWindowIteration:
     # -----------------------------------------------------------------------
 
     def test_exec_type_preserved_from_first_window(self):
-        client = SequentialStubClient(pages=[
-            [raw("t1", W1_END - 1_000, "Trade")],
-        ])
+        client = SequentialStubClient(
+            pages=[
+                [raw("t1", W1_END - 1_000, "Trade")],
+            ]
+        )
         result = TradeHistoryService(client).get_history("ZECUSDT")
         assert result.trades[0].exec_type == "Trade"
 
     def test_exec_type_preserved_from_later_window(self):
-        client = SequentialStubClient(pages=[
-            [],                                               # W1 empty
-            [raw("f1", W2_END - 1_000, "Funding")],         # W2
-        ])
+        client = SequentialStubClient(
+            pages=[
+                [],  # W1 empty
+                [raw("f1", W2_END - 1_000, "Funding")],  # W2
+            ]
+        )
         result = TradeHistoryService(client).get_history("ZECUSDT")
         assert result.trades[0].exec_type == "Funding"
 
@@ -500,9 +616,11 @@ class TestTradeHistoryWindowIteration:
 
     def test_error_from_any_window_propagates(self):
         class ErrClient:
-            def get_trade_history(self, symbol, category, limit,
-                                  start_time=None, end_time=None):
+            def get_trade_history(
+                self, symbol, category, limit, start_time=None, end_time=None
+            ):
                 raise BybitAPIError("Bybit API error [10003]: boom")
+
         with pytest.raises(BybitAPIError, match="10003"):
             TradeHistoryService(ErrClient()).get_history("ZECUSDT")
 
@@ -511,33 +629,74 @@ class TestTradeHistoryWindowIteration:
 # TradeHistoryExporter tests
 # ===========================================================================
 
+
 def _make_history(*trades: tuple) -> TradeHistory:
     """
     Build a TradeHistory from
-    (trade_id, symbol, side, price, size, exec_type, date, time) tuples.
+    (trade_id, symbol, side, price, size, exec_type, trading_fee, date, time) tuples.
     """
     return TradeHistory(
         symbol="ZECUSDT",
         category="linear",
         trades=[
-            Trade(trade_id=tid, symbol=sym, side=sd, price=p, size=sz,
-                  exec_type=et, date=d, time=t)
-            for tid, sym, sd, p, sz, et, d, t in trades
+            Trade(
+                trade_id=tid,
+                symbol=sym,
+                side=sd,
+                price=Decimal(str(p)),
+                size=Decimal(str(sz)),
+                exec_type=et,
+                trading_fee=Decimal(str(fee)),
+                date=d,
+                time=t,
+            )
+            for tid, sym, sd, p, sz, et, fee, d, t in trades
         ],
     )
 
 
 SAMPLE_HISTORY = _make_history(
-    ("exec-001", "ZECUSDT", "Buy",  30.50, 10.0, "Trade",   "2023-11-14", "22:13:19"),
-    ("exec-002", "ZECUSDT", "Sell", 31.00,  5.0, "Trade",   "2023-11-14", "22:13:18"),
-    ("exec-003", "ZECUSDT", "Buy",  29.75, 20.0, "Funding", "2023-11-14", "22:13:17"),
+    (
+        "exec-001",
+        "ZECUSDT",
+        "Buy",
+        30.50,
+        10.0,
+        "Trade",
+        "0.05",
+        "2023-11-14",
+        "22:13:19",
+    ),
+    (
+        "exec-002",
+        "ZECUSDT",
+        "Sell",
+        31.00,
+        5.0,
+        "Trade",
+        "0.03",
+        "2023-11-14",
+        "22:13:18",
+    ),
+    (
+        "exec-003",
+        "ZECUSDT",
+        "Buy",
+        29.75,
+        20.0,
+        "Funding",
+        "-0.01",
+        "2023-11-14",
+        "22:13:17",
+    ),
 )
 
 
 class TestTradeHistoryExporter:
-
     def test_file_is_created(self, tmp_path):
-        TradeHistoryExporter(tmp_path / "ZECUSDT_tradeHistory.csv").export(SAMPLE_HISTORY)
+        TradeHistoryExporter(tmp_path / "ZECUSDT_tradeHistory.csv").export(
+            SAMPLE_HISTORY
+        )
         assert (tmp_path / "ZECUSDT_tradeHistory.csv").exists()
 
     def test_data_directory_created_automatically(self, tmp_path):
@@ -549,8 +708,21 @@ class TestTradeHistoryExporter:
         output = tmp_path / "out.csv"
         exp = TradeHistoryExporter(output)
         exp.export(SAMPLE_HISTORY)
-        exp.export(_make_history(("e1", "ZECUSDT", "Buy", 30.5, 10.0, "Trade",
-                                  "2023-11-14", "22:13:19")))
+        exp.export(
+            _make_history(
+                (
+                    "e1",
+                    "ZECUSDT",
+                    "Buy",
+                    30.5,
+                    10.0,
+                    "Trade",
+                    "0.05",
+                    "2023-11-14",
+                    "22:13:19",
+                )
+            )
+        )
         rows = read_csv(output)
         assert len(rows) == 2  # header + 1 trade
 
@@ -559,14 +731,36 @@ class TestTradeHistoryExporter:
         TradeHistoryExporter(output).export(SAMPLE_HISTORY)
         rows = read_csv(output)
         assert rows[0] == HEADERS
-        assert rows[0] == ["trade_id", "symbol", "side", "price", "size",
-                           "exec_type", "date", "time"]
+        assert rows[0] == [
+            "trade_id",
+            "symbol",
+            "side",
+            "price",
+            "size",
+            "exec_type",
+            "trading_fee",
+            "date",
+            "time",
+        ]
 
     def test_exec_type_column_present_in_headers(self, tmp_path):
         output = tmp_path / "out.csv"
         TradeHistoryExporter(output).export(SAMPLE_HISTORY)
         rows = read_csv(output)
         assert "exec_type" in rows[0]
+
+    def test_trading_fee_column_present_in_headers(self, tmp_path):
+        output = tmp_path / "out.csv"
+        TradeHistoryExporter(output).export(SAMPLE_HISTORY)
+        rows = read_csv(output)
+        assert "trading_fee" in rows[0]
+
+    def test_trading_fee_column_is_after_exec_type(self, tmp_path):
+        output = tmp_path / "out.csv"
+        TradeHistoryExporter(output).export(SAMPLE_HISTORY)
+        rows = read_csv(output)
+        headers = rows[0]
+        assert headers.index("trading_fee") == headers.index("exec_type") + 1
 
     def test_no_timestamp_column_in_headers(self, tmp_path):
         output = tmp_path / "out.csv"
@@ -584,21 +778,37 @@ class TestTradeHistoryExporter:
         output = tmp_path / "out.csv"
         TradeHistoryExporter(output).export(SAMPLE_HISTORY)
         rows = read_csv(output)
-        assert rows[1] == ["exec-001", "ZECUSDT", "Buy", "30.5", "10.0",
-                           "Trade", "2023-11-14", "22:13:19"]
+        assert rows[1] == [
+            "exec-001",
+            "ZECUSDT",
+            "Buy",
+            "30.5",
+            "10.0",
+            "Trade",
+            "0.05",
+            "2023-11-14",
+            "22:13:19",
+        ]
 
     def test_funding_exec_type_written_correctly(self, tmp_path):
         output = tmp_path / "out.csv"
         TradeHistoryExporter(output).export(SAMPLE_HISTORY)
         rows = read_csv(output)
-        assert rows[3][5] == "Funding"   # exec_type is column index 5
+        assert rows[3][5] == "Funding"  # exec_type is column index 5
 
-    def test_correct_column_count_is_eight(self, tmp_path):
+    def test_trading_fee_negative_written_correctly(self, tmp_path):
         output = tmp_path / "out.csv"
         TradeHistoryExporter(output).export(SAMPLE_HISTORY)
         rows = read_csv(output)
-        assert len(rows[0]) == 8
-        assert len(rows[1]) == 8
+        # exec-003 (row index 3) has trading_fee "-0.01" at column index 6
+        assert rows[3][6] == "-0.01"
+
+    def test_correct_column_count_is_nine(self, tmp_path):
+        output = tmp_path / "out.csv"
+        TradeHistoryExporter(output).export(SAMPLE_HISTORY)
+        rows = read_csv(output)
+        assert len(rows[0]) == 9
+        assert len(rows[1]) == 9
 
     def test_empty_history_writes_header_only(self, tmp_path):
         output = tmp_path / "out.csv"
@@ -607,13 +817,19 @@ class TestTradeHistoryExporter:
         assert rows == [HEADERS]
 
     def test_make_exporter_builds_correct_filename(self, tmp_path):
-        assert make_exporter("ZECUSDT", output_dir=tmp_path)._output_path == \
-               tmp_path / "ZECUSDT_tradeHistory.csv"
+        assert (
+            make_exporter("ZECUSDT", output_dir=tmp_path)._output_path
+            == tmp_path / "ZECUSDT_tradeHistory.csv"
+        )
 
     def test_make_exporter_uppercases_symbol(self, tmp_path):
-        assert make_exporter("zecusdt", output_dir=tmp_path)._output_path.name == \
-               "ZECUSDT_tradeHistory.csv"
+        assert (
+            make_exporter("zecusdt", output_dir=tmp_path)._output_path.name
+            == "ZECUSDT_tradeHistory.csv"
+        )
 
     def test_make_exporter_default_dir_is_data(self):
-        assert make_exporter("ZECUSDT")._output_path == \
-               pathlib.Path("data") / "ZECUSDT_tradeHistory.csv"
+        assert (
+            make_exporter("ZECUSDT")._output_path
+            == pathlib.Path("data") / "ZECUSDT_tradeHistory.csv"
+        )
