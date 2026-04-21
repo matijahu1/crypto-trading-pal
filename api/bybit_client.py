@@ -337,7 +337,7 @@ class BybitClient:
         exec_type: str | None = None,
     ) -> list[dict[str, Any]]:
         kwargs: dict[str, Any] = {"category": category, "limit": limit}
-        if symbol:
+        if symbol and symbol != "ACCOUNT":
             kwargs["symbol"] = symbol
         if exec_type:
             kwargs["execType"] = exec_type

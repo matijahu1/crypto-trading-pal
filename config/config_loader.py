@@ -254,7 +254,9 @@ def _parse_actions(actions_raw: dict, config_path: pathlib.Path) -> ActionsConfi
 def _parse_request_settings(
     request_settings_raw: dict, config_path: pathlib.Path
 ) -> RequestSettingsConfig:
-    symbol = request_settings_raw.get("symbol", "BTCUSDT")
+    symbol = request_settings_raw.get("symbol", "ACCOUNT")
+    if not symbol:
+        symbol = "ACCOUNT"
     if not isinstance(symbol, str):
         raise ConfigError(
             f"'request_settings.symbol' must be a string, got {type(symbol).__name__!r}"

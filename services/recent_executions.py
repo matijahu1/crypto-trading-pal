@@ -3,9 +3,10 @@ services/recent_executions.py — Simple service for the latest N trade fills.
 """
 
 from __future__ import annotations
-from dataclasses import dataclass
-from typing import Any, Protocol, Optional
+
 import logging
+from dataclasses import dataclass
+from typing import Any, Protocol
 
 from utils.time_utils import ms_timestamp_to_date_time
 
@@ -15,22 +16,26 @@ log = logging.getLogger(__name__)
 # Protocol
 # ---------------------------------------------------------------------------
 
+
 class RecentExecutionClientProtocol(Protocol):
     def get_executions(
-        self, 
-        symbol: str | None = None, 
-        category: str = "linear", 
+        self,
+        symbol: str | None = None,
+        category: str = "linear",
         limit: int = 100,
-        exec_type: str | None = None  
+        exec_type: str | None = None,
     ) -> list[dict[str, Any]]: ...
+
 
 # ---------------------------------------------------------------------------
 # Result Dataclasses
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class RecentExecution:
     """A clean mapping of a single trade fill."""
+
     exec_id: str
     order_id: str
     symbol: str
@@ -41,20 +46,23 @@ class RecentExecution:
     date: str
     time: str
 
+
 @dataclass
 class RecentExecutionHistory:
     symbol: str
     count: int
     executions: list[RecentExecution]
 
+
 # ---------------------------------------------------------------------------
 # Service
 # ---------------------------------------------------------------------------
 
+
 class RecentExecutionService:
     """
     Provides a simple snapshot of the most recent executions.
-    This service does NOT paginate or use time windows. 
+    This service does NOT paginate or use time windows.
     It simply fetches the last 'limit' records.
     """
 
@@ -62,24 +70,24 @@ class RecentExecutionService:
         self,
         client: RecentExecutionClientProtocol,
         category: str = "linear",
-        default_limit: int = 10  # Hardcoded default, can be overwritten by config later
+        default_limit: int = 10,  # Hardcoded default, can be overwritten by config later
     ) -> None:
         self._client = client
         self._category = category
         self._default_limit = default_limit
 
     def get_recent_fills(
-        self, 
-        symbol: str | None = None, 
-        limit: int | None = None
+        self, symbol: str | None = None, limit: int | None = None
     ) -> RecentExecutionHistory:
         """
         Fetch the last X trade fills using server-side filtering.
         """
         fetch_limit = limit if limit is not None else self._default_limit
-        
+
         # Context name for logging and the dataclass
-        context_name = symbol.strip().upper() if (symbol and symbol.strip()) else "ACCOUNT-WIDE"
+        context_name = (
+            symbol.strip().upper() if (symbol and symbol.strip()) else "ACCOUNT"
+        )
 
         log.info(f"Requesting {fetch_limit} trades from API for {context_name}...")
 
@@ -89,7 +97,7 @@ class RecentExecutionService:
             symbol=symbol,
             category=self._category,
             limit=fetch_limit,
-            exec_type="Trade"  # Server-side filter applied here
+            exec_type="Trade",  # Server-side filter applied here
         )
 
         executions = [
@@ -102,7 +110,7 @@ class RecentExecutionService:
                 qty=float(entry.get("execQty", 0) or 0),
                 exec_type=entry.get("execType", ""),
                 date=ms_timestamp_to_date_time(str(entry.get("execTime", "")))[0],
-                time=ms_timestamp_to_date_time(str(entry.get("execTime", "")))[1]
+                time=ms_timestamp_to_date_time(str(entry.get("execTime", "")))[1],
             )
             for entry in raw_data
         ]
@@ -110,7 +118,5 @@ class RecentExecutionService:
         log.info(f"Received {len(executions)} trades from Bybit.")
 
         return RecentExecutionHistory(
-            symbol=context_name,
-            count=len(executions),
-            executions=executions
+            symbol=context_name, count=len(executions), executions=executions
         )
