@@ -16,7 +16,8 @@
             "order_history",
             "recent_executions",
             "generate_lifo_report",
-            "open_orders"
+            "open_orders",
+            "grid_bots"
         ]
     },
     "request_settings": {

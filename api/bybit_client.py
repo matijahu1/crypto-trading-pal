@@ -13,6 +13,10 @@ Change log:
     ``pybit._helpers.generate_timestamp`` so that every subsequent signed
     request uses a corrected timestamp.  This prevents ErrCode 10002
     ("request expired / invalid timestamp") on machines whose clocks drift.
+  - Added get_grid_bots() and get_grid_bot_detail() for Futures Grid Bot
+    data export.  Both methods use ``session._submit_request`` because
+    Bybit does not publish these endpoints in its V5 REST documentation.
+    See the NOTE in each method's docstring.
 """
 
 from __future__ import annotations
@@ -30,6 +34,29 @@ log = logging.getLogger(__name__)
 # The API hard-caps recv_window at 60 000 ms; 10 000 is a safe default
 # that gives 10 s of tolerance without weakening replay protection.
 _DEFAULT_RECV_WINDOW: int = 10_000
+
+# ---------------------------------------------------------------------------
+# Grid bot endpoint paths
+# ---------------------------------------------------------------------------
+
+# ⚠️  IMPORTANT — UNDOCUMENTED ENDPOINTS
+#
+# Bybit does not publish REST endpoints for querying the Futures Grid Bot
+# list or detail in its V5 API documentation (bybit-exchange.github.io).
+# The values below are the best-known paths based on network inspection of
+# the Bybit web app as of early 2025.  They are subject to change without
+# notice.
+#
+# To update them if Bybit changes its backend:
+#   1. Open the Bybit trading bot page in a browser with DevTools → Network.
+#   2. Navigate to "My Bots" and look for authenticated XHR/fetch calls.
+#   3. Update the path constants below.
+#
+# If/when Bybit documents these endpoints officially, replace the path
+# constants and switch from ``_submit_request`` to a proper pybit method.
+
+_GRID_BOT_LIST_PATH = "/v5/grid/query-grid-list"
+_GRID_BOT_DETAIL_PATH = "/v5/grid/get-grid-sub-order"
 
 
 class BybitAPIError(Exception):
@@ -120,8 +147,6 @@ class BybitClient:
             )
             return
 
-        # _unwrap will raise BybitAPIError on retCode != 0, but get_server_time
-        # is public so we handle it inline here to keep startup safe.
         ret_code = response.get("retCode", 0)
         if ret_code != 0:
             log.warning(
@@ -132,7 +157,6 @@ class BybitClient:
             )
             return
 
-        # Bybit returns timeSecond as a string of Unix seconds.
         try:
             server_time_ms = int(response["result"]["timeSecond"]) * 1_000
         except (KeyError, ValueError, TypeError) as exc:
@@ -149,7 +173,6 @@ class BybitClient:
         offset_ms = server_time_ms - local_midpoint_ms
 
         if abs(offset_ms) < 500:
-            # Offset is negligible — no patch needed.
             log.debug(
                 "Clock offset is %+d ms — within tolerance, no correction applied.",
                 offset_ms,
@@ -162,7 +185,6 @@ class BybitClient:
             offset_ms,
         )
 
-        # Capture offset_ms in a closure and replace the module-level function.
         _captured_offset = offset_ms
 
         def _corrected_timestamp() -> int:
@@ -178,9 +200,6 @@ class BybitClient:
     def get_server_time_ms(self) -> int:
         """
         Return the current Bybit server time as a Unix millisecond integer.
-
-        Useful for callers that need a reliable "now" reference independent
-        of local clock skew (e.g. computing lookback windows).
 
         Raises:
             BybitAPIError: if the request fails or returns a non-zero retCode.
@@ -379,3 +398,96 @@ class BybitClient:
 
         data = self._unwrap(response, symbol)
         return cast(list[dict[str, Any]], data["result"]["list"])
+
+    # ------------------------------------------------------------------
+    # Grid Bot methods (undocumented endpoints — see module docstring)
+    # ------------------------------------------------------------------
+
+    def get_grid_bots(
+        self,
+        symbol: str,
+        category: str = "future",
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """
+        Return a list of active Futures Grid Bots for the given symbol.
+
+        ⚠️  UNDOCUMENTED ENDPOINT — see ``_GRID_BOT_LIST_PATH`` for notes.
+
+        The response ``result.list`` contains one record per active bot.
+        Each record includes at minimum: ``botId``, ``symbol``, ``status``,
+        ``investment``, ``gridProfit``, ``upperPrice``, ``lowerPrice``,
+        ``gridNum``, ``leverage``, ``direction``, ``createdTime``.
+
+        Args:
+            symbol:   Futures symbol, e.g. "ICPUSDT".
+            category: Bot category — "future" for Futures Grid (not "linear").
+            limit:    Maximum number of records to return.
+
+        Returns:
+            List of raw bot dicts.  Empty list when no bots are active.
+
+        Raises:
+            BybitAPIError: On authentication failure or any API/network error.
+        """
+        params: dict[str, Any] = {
+            "symbol": symbol.upper(),
+            "category": category,
+            "limit": limit,
+        }
+        try:
+            response = self._session._submit_request(  # type: ignore[attr-defined]
+                method="GET",
+                path=_GRID_BOT_LIST_PATH,
+                query=params,
+                auth=True,
+            )
+        except Exception as exc:
+            raise BybitAPIError(
+                f"Failed to fetch grid bot list for {symbol}: {exc}"
+            ) from exc
+
+        data = self._unwrap(response, symbol)
+        result = data.get("result", {})
+        # The list may be nested under "list" or "gridList" depending on version
+        bots: list[dict[str, Any]] = result.get("list") or result.get("gridList") or []
+        return bots
+
+    def get_grid_bot_detail(
+        self,
+        bot_id: str,
+    ) -> dict[str, Any]:
+        """
+        Return the full detail record for a single Futures Grid Bot.
+
+        ⚠️  UNDOCUMENTED ENDPOINT — see ``_GRID_BOT_DETAIL_PATH`` for notes.
+
+        The response includes all fields from get_grid_bots() plus richer
+        per-grid data: ``filledOpenQty``, ``filledCloseQty``,
+        ``totalInvestment``, ``unrealizedPnl``, and more.
+
+        Args:
+            bot_id: The ``botId`` string returned by ``get_grid_bots()``.
+
+        Returns:
+            A single raw bot detail dict.
+
+        Raises:
+            BybitAPIError: On authentication failure, unknown botId, or any
+                           API/network error.
+        """
+        params: dict[str, Any] = {"botId": bot_id}
+        try:
+            response = self._session._submit_request(  # type: ignore[attr-defined]
+                method="GET",
+                path=_GRID_BOT_DETAIL_PATH,
+                query=params,
+                auth=True,
+            )
+        except Exception as exc:
+            raise BybitAPIError(
+                f"Failed to fetch grid bot detail for botId={bot_id}: {exc}"
+            ) from exc
+
+        data = self._unwrap(response)
+        return cast(dict[str, Any], data.get("result", {}))

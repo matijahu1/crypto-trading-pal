@@ -15,6 +15,7 @@ Available action names:
   "recent_executions"    → data/exported/ACCOUNT_recent_fills.csv
   "open_orders"          → data/exported/<symbol>_openOrders.csv
   "generate_lifo_report" → data/exported/<symbol>_lifo_inventory.csv
+  "grid_bots"            → data/exported/<symbol>_gridBots.csv
 
 Run:
     python main.py
@@ -119,6 +120,7 @@ def _build_registry(
         ),
         "open_orders": lambda: _run_open_orders(client, paths),
         "generate_lifo_report": lambda: _run_generate_lifo_report(client, paths),
+        "grid_bots": lambda: _run_grid_bots(client, paths),
     }
 
 
@@ -401,6 +403,56 @@ def _run_generate_lifo_report(client: BybitClient, paths: PathProvider) -> None:
         partial_count,
         closed_count,
         total_pnl,
+    )
+
+
+def _run_grid_bots(client: BybitClient, paths: PathProvider) -> None:
+    """
+    Fetch active Futures Grid Bots for the configured symbol and export
+    their summary + detail data to ``{SYMBOL}_gridBots.csv``.
+
+    Two-step fetch strategy:
+      1. LIST   — Retrieve all active bots for the symbol (summary data).
+      2. DETAIL — For each bot, fetch the enriched detail record (unrealised
+                  PnL, fill quantities, etc.).  A single detail failure does
+                  NOT abort the export; the bot is still written with the
+                  detail fields at their default Decimal("0") values.
+
+    Behaviour when no bots are found:
+        An empty CSV (headers only) is written so downstream tools can
+        rely on the file being present after every successful run.
+
+    ⚠️  These API endpoints are undocumented — see api/bybit_client.py for
+        full notes and instructions on updating the paths if Bybit changes
+        its backend.
+    """
+    from exporters.grid_bot_exporter import GridBotExporter
+    from services.grid_bot import GridBotService
+
+    output_path = paths.grid_bots_path()
+    log.info("Fetching grid bots for %s → %s", paths.symbol, output_path)
+
+    service = GridBotService(client=client, category="future")
+    exporter = GridBotExporter(output_path)
+
+    try:
+        snapshot = service.get_snapshot(paths.symbol, fetch_details=True)
+    except BybitAPIError as exc:
+        log.error("Could not fetch grid bots for %s: %s", paths.symbol, exc)
+        return
+
+    if not snapshot.bots:
+        log.info(
+            "No active grid bots found for %s — writing empty CSV to %s",
+            paths.symbol,
+            output_path,
+        )
+
+    path = exporter.export(snapshot)
+    log.info(
+        "Exported %d grid bot(s) to %s",
+        len(snapshot.bots),
+        path,
     )
 
 

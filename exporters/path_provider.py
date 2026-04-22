@@ -110,6 +110,20 @@ class PathProvider:
     def open_orders_path(self) -> pathlib.Path:
         return self._base_dir / f"{self._symbol}_open_orders.csv"
 
+    def grid_bots_path(self) -> "pathlib.Path":
+        """
+        Return the output path for the Futures Grid Bot CSV export.
+
+        Returns:
+            ``{base_dir}/{SYMBOL}_gridBots.csv``
+
+        Example::
+
+            paths.grid_bots_path()
+            # → PosixPath("data/exported/ICPUSDT_gridBots.csv")
+        """
+        return self.base_dir / f"{self.symbol}_gridBots.csv"
+
     # ------------------------------------------------------------------
     # Symbol-independent paths
     # ------------------------------------------------------------------

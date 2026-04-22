@@ -16,6 +16,8 @@ Change log:
     Override in config.json under ``"paths": { "exported_dir": "..." }``.
   - AppConfig exposes ``exported_dir`` as a convenience property that always
     returns an absolute pathlib.Path ready to hand to PathProvider.
+  - Added ``"grid_bots"`` to ALL_ACTIONS.
+    Output: ``data/exported/<SYMBOL>_gridBots.csv``.
 """
 
 from __future__ import annotations
@@ -45,6 +47,7 @@ ALL_ACTIONS: list[str] = [
     "recent_executions",
     "generate_lifo_report",
     "open_orders",
+    "grid_bots",
 ]
 
 
