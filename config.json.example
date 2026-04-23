@@ -24,5 +24,9 @@
         "symbol": "CCUSDT",
         "lookback_days_default": 60,
         "recent_executions_limit": 10
-    }
+    },
+    "futures_grid_bots": {
+        "CCUSDT": ["123456"],
+        "ZECUSDT": ["345678", "333222"]
+    }    
 }
