@@ -17,6 +17,12 @@ Change log:
     data export.  Both methods use ``session._submit_request`` because
     Bybit does not publish these endpoints in its V5 REST documentation.
     See the NOTE in each method's docstring.
+  - Added get_futures_grid_bot_detail() which calls the *documented* Bybit
+    V5 endpoint for Futures Grid Bot detail:
+      GET /v5/bot/futures-grid/get-detail
+    This is the preferred method for fetching bot details by ID and is used
+    by FuturesGridBotService.  The older get_grid_bot_detail() (undocumented
+    endpoint) is retained for backward compatibility.
 """
 
 from __future__ import annotations
@@ -55,8 +61,12 @@ _DEFAULT_RECV_WINDOW: int = 10_000
 # If/when Bybit documents these endpoints officially, replace the path
 # constants and switch from ``_submit_request`` to a proper pybit method.
 
-_GRID_BOT_LIST_PATH = "/v5/grid/query-grid-list"
+_GRID_BOT_LIST_PATH = "/v5/bot/futures-grid/query-grid-list"
 _GRID_BOT_DETAIL_PATH = "/v5/grid/get-grid-sub-order"
+
+# Documented V5 endpoint for Futures Grid Bot detail (by bot ID).
+# Reference: https://bybit-exchange.github.io/docs/v5/bot/futures-grid/get-detail
+_FUTURES_GRID_BOT_DETAIL_PATH = "/v5/bot/futures-grid/get-detail"
 
 
 class BybitAPIError(Exception):
@@ -487,6 +497,62 @@ class BybitClient:
         except Exception as exc:
             raise BybitAPIError(
                 f"Failed to fetch grid bot detail for botId={bot_id}: {exc}"
+            ) from exc
+
+        data = self._unwrap(response)
+        return cast(dict[str, Any], data.get("result", {}))
+
+    def get_futures_grid_bot_detail(
+        self,
+        bot_id: str,
+    ) -> dict[str, Any]:
+        """
+        Return the full detail record for a single Futures Grid Bot using
+        the **documented** Bybit V5 endpoint.
+
+        API reference:
+            https://bybit-exchange.github.io/docs/v5/bot/futures-grid/get-detail
+
+        This is the preferred method used by ``FuturesGridBotService``.
+        Unlike ``get_grid_bot_detail()`` (which hits an undocumented path),
+        this method calls the officially documented endpoint and is therefore
+        more stable.
+
+        Request parameters:
+            botId (str): The Bybit-assigned bot ID.  Obtain bot IDs from the
+                         Bybit web UI or the Trading Bot section of the app,
+                         then store them in ``config.json`` under
+                         ``"futures_grid_bots"``.
+
+        Response fields (commonly present):
+            botId, symbol, botStatus, upperPrice, lowerPrice, gridNum,
+            leverage, triggerDirection, investment, totalInvestment,
+            gridProfit, unrealizedPnl, filledOpenQty, filledCloseQty,
+            createdTime, stoppedTime.
+
+        Args:
+            bot_id: The ``botId`` string as shown in the Bybit UI and stored
+                    in config.json.
+
+        Returns:
+            A single raw bot detail dict (the ``result`` object from the API
+            response).  Returns an empty dict when the API result is absent.
+
+        Raises:
+            BybitAPIError: On authentication failure, an unknown botId, or
+                           any API / network error.
+        """
+        params: dict[str, Any] = {"botId": bot_id}
+        try:
+            response = self._session._submit_request(  # type: ignore[attr-defined]
+                method="GET",
+                path=_FUTURES_GRID_BOT_DETAIL_PATH,
+                query=params,
+                auth=True,
+            )
+        except Exception as exc:
+            raise BybitAPIError(
+                f"Failed to fetch futures grid bot detail for botId={bot_id}: {exc}"
             ) from exc
 
         data = self._unwrap(response)

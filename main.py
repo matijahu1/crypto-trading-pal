@@ -7,6 +7,10 @@ data/config.json.  Comment out or remove any action name to skip that step.
 The symbol used for trade history and order history actions is
 read from "request_settings.symbol" in data/config.json.
 
+The bot IDs used for the "grid_bots" action are read from
+"futures_grid_bots.<SYMBOL>" in data/config.json.  Add bot IDs there to
+enable the grid bot detail export for each symbol.
+
 Available action names:
   "balances"             → data/exported/balance.csv
   "futures_positions"    → data/exported/futures_positions.csv
@@ -15,7 +19,7 @@ Available action names:
   "recent_executions"    → data/exported/ACCOUNT_recent_fills.csv
   "open_orders"          → data/exported/<symbol>_openOrders.csv
   "generate_lifo_report" → data/exported/<symbol>_lifo_inventory.csv
-  "grid_bots"            → data/exported/<symbol>_gridBots.csv
+  "grid_bots"            → data/exported/<symbol>_FuturesGridBots.csv
 
 Run:
     python main.py
@@ -35,7 +39,7 @@ from typing import Callable, Optional
 from dotenv import load_dotenv
 
 from api.bybit_client import BybitAPIError, BybitClient
-from config.config_loader import ConfigError, load_config
+from config.config_loader import AppConfig, ConfigError, load_config
 from config.logging_setup import setup_logging
 from exporters.balance_exporter import BalanceExporter
 from exporters.futures_position_exporter import FuturesPositionExporter
@@ -86,7 +90,7 @@ def main() -> None:
     log.debug("Export directory: %s", paths.base_dir)
 
     # 6. Dispatch — run only the actions listed in config
-    _dispatch(client, config.enabled_actions, paths, config.lookback_days_default)
+    _dispatch(client, config, paths)
 
     log.info("Batch run complete")
 
@@ -98,8 +102,8 @@ def main() -> None:
 
 def _build_registry(
     client: BybitClient,
+    config: AppConfig,
     paths: PathProvider,
-    lookback_days: int,
 ) -> dict[str, Callable[[], None]]:
     """
     Map every known action name to a zero-argument callable.
@@ -110,6 +114,7 @@ def _build_registry(
       3. Add the action name to ALL_ACTIONS in config_loader.py.
       4. Register it here.
     """
+    lookback_days = config.lookback_days_default
     return {
         "balances": lambda: _run_balances(client, paths),
         "futures_positions": lambda: _run_futures_positions(client, paths),
@@ -120,23 +125,22 @@ def _build_registry(
         ),
         "open_orders": lambda: _run_open_orders(client, paths),
         "generate_lifo_report": lambda: _run_generate_lifo_report(client, paths),
-        "grid_bots": lambda: _run_grid_bots(client, paths),
+        "grid_bots": lambda: _run_grid_bots(client, config, paths),
     }
 
 
 def _dispatch(
     client: BybitClient,
-    enabled_actions: list[str],
+    config: AppConfig,
     paths: PathProvider,
-    lookback_days: int,
 ) -> None:
-    if not enabled_actions:
+    if not config.enabled_actions:
         log.warning("No actions are enabled in config.json — nothing to do")
         return
 
-    registry = _build_registry(client, paths, lookback_days)
+    registry = _build_registry(client, config, paths)
 
-    for action in enabled_actions:
+    for action in config.enabled_actions:
         log.debug("Running action: %s", action)
         registry[action]()
 
@@ -406,47 +410,70 @@ def _run_generate_lifo_report(client: BybitClient, paths: PathProvider) -> None:
     )
 
 
-def _run_grid_bots(client: BybitClient, paths: PathProvider) -> None:
+def _run_grid_bots(
+    client: BybitClient,
+    config: AppConfig,
+    paths: PathProvider,
+) -> None:
     """
-    Fetch active Futures Grid Bots for the configured symbol and export
-    their summary + detail data to ``{SYMBOL}_gridBots.csv``.
+    Fetch Futures Grid Bot details for the configured symbol using bot IDs
+    defined in config.json, and export them to ``{SYMBOL}_FuturesGridBots.csv``.
 
-    Two-step fetch strategy:
-      1. LIST   — Retrieve all active bots for the symbol (summary data).
-      2. DETAIL — For each bot, fetch the enriched detail record (unrealised
-                  PnL, fill quantities, etc.).  A single detail failure does
-                  NOT abort the export; the bot is still written with the
-                  detail fields at their default Decimal("0") values.
+    Bot ID source
+    -------------
+    Bot IDs are read from the ``"futures_grid_bots"`` block in config.json::
 
-    Behaviour when no bots are found:
-        An empty CSV (headers only) is written so downstream tools can
-        rely on the file being present after every successful run.
+        "futures_grid_bots": {
+            "CCUSDT": ["123456", "789012"],
+            "ZECUSDT": ["345678", "333222"]
+        }
 
-    ⚠️  These API endpoints are undocumented — see api/bybit_client.py for
-        full notes and instructions on updating the paths if Bybit changes
-        its backend.
+    Only the IDs for the active symbol (``request_settings.symbol``) are
+    fetched.  If no IDs are configured for that symbol, the action logs a
+    warning and writes an empty CSV so downstream tools always find the file.
+
+    Fetch strategy
+    --------------
+    One API call is made per bot ID (documented endpoint):
+        GET /v5/bot/futures-grid/get-detail?botId=<id>
+
+    A single-bot failure does NOT abort the export — it is logged and that
+    bot is skipped.  All remaining bots are still fetched and written.
+
+    Output
+    ------
+    ``data/exported/<SYMBOL>_FuturesGridBots.csv``
     """
-    from exporters.grid_bot_exporter import GridBotExporter
-    from services.grid_bot import GridBotService
+    from exporters.futures_grid_bot_exporter import FuturesGridBotExporter
+    from services.futures_grid_bot import FuturesGridBotService
 
-    output_path = paths.grid_bots_path()
-    log.info("Fetching grid bots for %s → %s", paths.symbol, output_path)
+    symbol = paths.symbol
+    output_path = paths.base_dir / f"{symbol}_FuturesGridBots.csv"
 
-    service = GridBotService(client=client, category="future")
-    exporter = GridBotExporter(output_path)
+    bot_ids = config.get_bot_ids(symbol)
+
+    log.info(
+        "Fetching Futures Grid Bot details for %s (%d bot ID(s) configured) → %s",
+        symbol,
+        len(bot_ids),
+        output_path,
+    )
+
+    if not bot_ids:
+        log.warning(
+            "No bot IDs configured for %s under 'futures_grid_bots' in config.json. "
+            "Add bot IDs to enable this export.  Writing empty CSV.",
+            symbol,
+        )
+
+    service = FuturesGridBotService(client=client)
+    exporter = FuturesGridBotExporter(output_path)
 
     try:
-        snapshot = service.get_snapshot(paths.symbol, fetch_details=True)
-    except BybitAPIError as exc:
-        log.error("Could not fetch grid bots for %s: %s", paths.symbol, exc)
+        snapshot = service.get_snapshot(symbol=symbol, bot_ids=bot_ids)
+    except Exception as exc:  # noqa: BLE001 — surface any unexpected error
+        log.error("Could not fetch grid bot details for %s: %s", symbol, exc)
         return
-
-    if not snapshot.bots:
-        log.info(
-            "No active grid bots found for %s — writing empty CSV to %s",
-            paths.symbol,
-            output_path,
-        )
 
     path = exporter.export(snapshot)
     log.info(

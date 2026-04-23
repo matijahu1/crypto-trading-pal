@@ -18,6 +18,19 @@ Change log:
     returns an absolute pathlib.Path ready to hand to PathProvider.
   - Added ``"grid_bots"`` to ALL_ACTIONS.
     Output: ``data/exported/<SYMBOL>_gridBots.csv``.
+  - Added ``FuturesGridBotsConfig`` to hold manually configured bot IDs.
+    Structure in config.json::
+
+        "futures_grid_bots": {
+            "CCUSDT":  ["123456", "789012"],
+            "ZECUSDT": ["345678", "333222"]
+        }
+
+    AppConfig exposes ``futures_grid_bots`` as a convenience property that
+    returns the dict of symbol → [bot_id, ...] mappings.
+    Bot IDs for a specific symbol can be retrieved via
+    ``config.get_bot_ids(symbol)`` which always returns a list (empty when
+    the symbol has no configured bots).
 """
 
 from __future__ import annotations
@@ -100,6 +113,43 @@ class RequestSettingsConfig:
 
 
 @dataclass
+class FuturesGridBotsConfig:
+    """
+    Holds manually configured Futures Grid Bot IDs, grouped by symbol.
+
+    Bybit does not provide a public API to list bot IDs, so they must be
+    specified in config.json under the ``"futures_grid_bots"`` key.
+
+    Structure in config.json::
+
+        "futures_grid_bots": {
+            "CCUSDT":  ["123456", "789012"],
+            "ZECUSDT": ["345678", "333222"]
+        }
+
+    Keys are normalised to upper-case during parsing.
+    An absent or empty ``"futures_grid_bots"`` block is valid and results in
+    an empty ``bots`` dict (no bots will be fetched for any symbol).
+    """
+
+    bots: dict[str, list[str]] = field(default_factory=dict)
+    """Mapping of SYMBOL (upper-case) → [bot_id, ...]."""
+
+    def get_bot_ids(self, symbol: str) -> list[str]:
+        """
+        Return the configured bot IDs for *symbol*.
+
+        Args:
+            symbol: Futures symbol, e.g. ``"CCUSDT"``.  Case-insensitive.
+
+        Returns:
+            List of bot ID strings.  Empty list when no bots are configured
+            for *symbol*.
+        """
+        return self.bots.get(symbol.upper(), [])
+
+
+@dataclass
 class AppConfig:
     """Typed representation of config.json."""
 
@@ -108,6 +158,9 @@ class AppConfig:
     actions: ActionsConfig = field(default_factory=ActionsConfig)
     request_settings: RequestSettingsConfig = field(
         default_factory=RequestSettingsConfig
+    )
+    futures_grid_bots: FuturesGridBotsConfig = field(
+        default_factory=FuturesGridBotsConfig
     )
 
     # ------------------------------------------------------------------
@@ -150,6 +203,18 @@ class AppConfig:
         p = pathlib.Path(self.paths.exported_dir)
         return p if p.is_absolute() else _PROJECT_ROOT / p
 
+    def get_bot_ids(self, symbol: str) -> list[str]:
+        """
+        Convenience pass-through to ``futures_grid_bots.get_bot_ids(symbol)``.
+
+        Args:
+            symbol: Futures symbol, e.g. ``"CCUSDT"``.  Case-insensitive.
+
+        Returns:
+            List of configured bot ID strings.  Empty when none are defined.
+        """
+        return self.futures_grid_bots.get_bot_ids(symbol)
+
 
 # ---------------------------------------------------------------------------
 # Loader
@@ -185,6 +250,7 @@ def _parse(data: dict, config_path: pathlib.Path) -> AppConfig:
         paths_raw = data.get("paths", {})
         actions_raw = data.get("actions", {})
         request_settings_raw = data.get("request_settings", {})
+        futures_grid_bots_raw = data.get("futures_grid_bots", {})
 
         if not isinstance(log_raw, dict):
             raise ConfigError(f"'logging' must be an object in {config_path}")
@@ -194,6 +260,10 @@ def _parse(data: dict, config_path: pathlib.Path) -> AppConfig:
             raise ConfigError(f"'actions' must be an object in {config_path}")
         if not isinstance(request_settings_raw, dict):
             raise ConfigError(f"'request_settings' must be an object in {config_path}")
+        if not isinstance(futures_grid_bots_raw, dict):
+            raise ConfigError(
+                f"'futures_grid_bots' must be an object in {config_path}"
+            )
 
         logging_cfg = LoggingConfig(
             enabled=bool(log_raw.get("enabled", True)),
@@ -205,6 +275,9 @@ def _parse(data: dict, config_path: pathlib.Path) -> AppConfig:
         request_settings_cfg = _parse_request_settings(
             request_settings_raw, config_path
         )
+        futures_grid_bots_cfg = _parse_futures_grid_bots(
+            futures_grid_bots_raw, config_path
+        )
 
     except (TypeError, ValueError) as exc:
         raise ConfigError(f"Invalid value in {config_path}: {exc}") from exc
@@ -214,6 +287,7 @@ def _parse(data: dict, config_path: pathlib.Path) -> AppConfig:
         paths=paths_cfg,
         actions=actions_cfg,
         request_settings=request_settings_cfg,
+        futures_grid_bots=futures_grid_bots_cfg,
     )
 
 
@@ -292,6 +366,73 @@ def _parse_request_settings(
     )
 
 
+def _parse_futures_grid_bots(
+    raw: dict, config_path: pathlib.Path
+) -> FuturesGridBotsConfig:
+    """
+    Parse the ``"futures_grid_bots"`` block.
+
+    Expected shape::
+
+        {
+            "CCUSDT":  ["123456", "789012"],
+            "ZECUSDT": ["345678", "333222"]
+        }
+
+    Rules:
+      - The block itself is optional; an absent key yields an empty config.
+      - Every key must be a non-empty string (symbol name).
+      - Every value must be a JSON array of non-empty strings (bot IDs).
+      - Duplicate bot IDs within one symbol are silently de-duplicated while
+        preserving order (first occurrence wins).
+      - Symbol keys are normalised to upper-case.
+
+    Raises:
+        ConfigError: On any structural or type violation.
+    """
+    if not raw:
+        return FuturesGridBotsConfig()
+
+    bots: dict[str, list[str]] = {}
+
+    for symbol_key, ids_raw in raw.items():
+        if not isinstance(symbol_key, str) or not symbol_key.strip():
+            raise ConfigError(
+                f"Every key in 'futures_grid_bots' must be a non-empty string "
+                f"(symbol name) in {config_path}; got {symbol_key!r}"
+            )
+        symbol = symbol_key.strip().upper()
+
+        if not isinstance(ids_raw, list):
+            raise ConfigError(
+                f"'futures_grid_bots.{symbol_key}' must be a JSON array of "
+                f"bot ID strings in {config_path}"
+            )
+
+        seen: set[str] = set()
+        bot_ids: list[str] = []
+        for idx, bot_id in enumerate(ids_raw):
+            if not isinstance(bot_id, str):
+                raise ConfigError(
+                    f"Every bot ID in 'futures_grid_bots.{symbol_key}' must be "
+                    f"a string in {config_path}; entry {idx} is "
+                    f"{type(bot_id).__name__!r}"
+                )
+            bot_id = bot_id.strip()
+            if not bot_id:
+                raise ConfigError(
+                    f"Bot IDs in 'futures_grid_bots.{symbol_key}' must not be "
+                    f"empty strings in {config_path} (entry {idx})"
+                )
+            if bot_id not in seen:
+                seen.add(bot_id)
+                bot_ids.append(bot_id)
+
+        bots[symbol] = bot_ids
+
+    return FuturesGridBotsConfig(bots=bots)
+
+
 def _write_template(config_path: pathlib.Path) -> None:
     template = {
         "logging": {
@@ -311,5 +452,6 @@ def _write_template(config_path: pathlib.Path) -> None:
             "lookback_days_default": 30,
             "recent_executions_limit": 10,
         },
+        "futures_grid_bots": {},
     }
     config_path.write_text(json.dumps(template, indent=4) + "\n", encoding="utf-8")
