@@ -463,45 +463,6 @@ class BybitClient:
         bots: list[dict[str, Any]] = result.get("list") or result.get("gridList") or []
         return bots
 
-    def get_grid_bot_detail(
-        self,
-        bot_id: str,
-    ) -> dict[str, Any]:
-        """
-        Return the full detail record for a single Futures Grid Bot.
-
-        ⚠️  UNDOCUMENTED ENDPOINT — see ``_GRID_BOT_DETAIL_PATH`` for notes.
-
-        The response includes all fields from get_grid_bots() plus richer
-        per-grid data: ``filledOpenQty``, ``filledCloseQty``,
-        ``totalInvestment``, ``unrealizedPnl``, and more.
-
-        Args:
-            bot_id: The ``botId`` string returned by ``get_grid_bots()``.
-
-        Returns:
-            A single raw bot detail dict.
-
-        Raises:
-            BybitAPIError: On authentication failure, unknown botId, or any
-                           API/network error.
-        """
-        params: dict[str, Any] = {"botId": bot_id}
-        try:
-            response = self._session._submit_request(  # type: ignore[attr-defined]
-                method="GET",
-                path=_GRID_BOT_DETAIL_PATH,
-                query=params,
-                auth=True,
-            )
-        except Exception as exc:
-            raise BybitAPIError(
-                f"Failed to fetch grid bot detail for botId={bot_id}: {exc}"
-            ) from exc
-
-        data = self._unwrap(response)
-        return cast(dict[str, Any], data.get("result", {}))
-
     def get_futures_grid_bot_detail(
         self,
         bot_id: str,
@@ -512,11 +473,6 @@ class BybitClient:
 
         API reference:
             https://bybit-exchange.github.io/docs/v5/bot/futures-grid/get-detail
-
-        This is the preferred method used by ``FuturesGridBotService``.
-        Unlike ``get_grid_bot_detail()`` (which hits an undocumented path),
-        this method calls the officially documented endpoint and is therefore
-        more stable.
 
         Request parameters:
             botId (str): The Bybit-assigned bot ID.  Obtain bot IDs from the
@@ -545,7 +501,7 @@ class BybitClient:
         params: dict[str, Any] = {"botId": bot_id}
         try:
             response = self._session._submit_request(  # type: ignore[attr-defined]
-                method="GET",
+                method="POST",
                 path=_FUTURES_GRID_BOT_DETAIL_PATH,
                 query=params,
                 auth=True,

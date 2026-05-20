@@ -5,7 +5,7 @@
         "log_to_file": true
     },
     "paths": {
-        "log_file": "bybit_bot.log",
+        "log_file": "crypto_pal.log",
         "exported_dir": "data/exported"
     },
     "actions": {
@@ -13,6 +13,8 @@
             "balances",
             "futures_positions",
             "trade_history",
+            "get_trade_type_trade",
+            "get_trade_type_funding",
             "order_history",
             "recent_executions",
             "generate_lifo_report",

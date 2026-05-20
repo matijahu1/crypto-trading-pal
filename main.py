@@ -15,6 +15,8 @@ Available action names:
   "balances"             → data/exported/balance.csv
   "futures_positions"    → data/exported/futures_positions.csv
   "trade_history"        → data/exported/<symbol>_tradeHistory.csv
+  "get_trade_type_trade"   → data/exported/<symbol>_tradeType_Trade.csv
+  "get_trade_type_funding" → data/exported/<symbol>_tradeType_Funding.csv
   "order_history"        → data/exported/<symbol>_orderHistory.csv
   "recent_executions"    → data/exported/ACCOUNT_recent_fills.csv
   "open_orders"          → data/exported/<symbol>_openOrders.csv
@@ -46,8 +48,13 @@ from exporters.futures_position_exporter import FuturesPositionExporter
 from exporters.order_history_exporter import OrderHistoryExporter
 from exporters.order_history_merger import OrderHistoryMerger
 from exporters.path_provider import PathProvider
+from exporters.filtered_trade_history_exporter import (
+    make_funding_exporter,
+    make_trade_exporter,
+)
 from exporters.trade_history_exporter import TradeHistoryExporter
 from services.balance import BalanceService
+from services.filtered_trade_history import FilteredTradeHistoryService
 from services.futures_position import FuturesPositionService
 from services.order_history import OrderHistory, OrderHistoryService
 from services.trade_history import TradeHistoryService
@@ -69,6 +76,7 @@ def main() -> None:
     setup_logging(config)
     log.info("Starting batch run")
     log.info("Enabled actions: %s", config.enabled_actions)
+    log.info("Symbol: %s", config.symbol)
 
     # 3. Load credentials from .env (never stored in config.json)
     load_dotenv()
@@ -82,12 +90,11 @@ def main() -> None:
 
     # 4. Build the shared API client
     client = BybitClient(testnet=testnet, api_key=api_key, api_secret=api_secret)
-    log.debug("BybitClient initialised (testnet=%s)", testnet)
 
     # 5. Build PathProvider and ensure the output directory exists once
     paths = PathProvider(base_dir=config.exported_dir, symbol=config.symbol)
     paths.ensure_dir()
-    log.debug("Export directory: %s", paths.base_dir)
+    log.info("Export directory: %s", paths.base_dir)
 
     # 6. Dispatch — run only the actions listed in config
     _dispatch(client, config, paths)
@@ -119,9 +126,11 @@ def _build_registry(
         "balances": lambda: _run_balances(client, paths),
         "futures_positions": lambda: _run_futures_positions(client, paths),
         "trade_history": lambda: _run_trade_history(client, paths, lookback_days),
+        "get_trade_type_trade": lambda: _run_trade_type_trade(client, paths, lookback_days),
+        "get_trade_type_funding": lambda: _run_trade_type_funding(client, paths, lookback_days),
         "order_history": lambda: _run_order_history(client, paths, lookback_days),
         "recent_executions": lambda: _run_recent_executions(
-            client, paths, paths.symbol, limit=10
+            client, paths, paths.symbol, limit=config.recent_executions_limit
         ),
         "open_orders": lambda: _run_open_orders(client, paths),
         "generate_lifo_report": lambda: _run_generate_lifo_report(client, paths),
@@ -219,6 +228,76 @@ def _run_trade_history(
 
     path = exporter.export(history)
     log.info("Exported %d trade(s) to %s", len(history.trades), path)
+
+
+def _run_trade_type_trade(
+    client: BybitClient, paths: PathProvider, lookback_days: int
+) -> None:
+    """Fetch and export only execType='Trade' fills for the configured symbol."""
+    output_path = paths.base_dir / f"{paths.symbol}_tradeType_Trade.csv"
+    log.info(
+        "Fetching execType=Trade history for %s → %s", paths.symbol, output_path
+    )
+
+    service = FilteredTradeHistoryService(
+        client=client,
+        exec_type="Trade",
+        category="linear",
+        lookback_days=lookback_days,
+    )
+    exporter = make_trade_exporter(paths.symbol, output_dir=paths.base_dir)
+
+    try:
+        history = service.get_history(paths.symbol)
+    except BybitAPIError as exc:
+        log.error("Could not fetch Trade executions for %s: %s", paths.symbol, exc)
+        return
+
+    if not history.trades:
+        log.warning(
+            "No Trade executions found for %s — %s not written",
+            paths.symbol,
+            output_path,
+        )
+        return
+
+    path = exporter.export(history)
+    log.info("Exported %d Trade execution(s) to %s", len(history.trades), path)
+
+
+def _run_trade_type_funding(
+    client: BybitClient, paths: PathProvider, lookback_days: int
+) -> None:
+    """Fetch and export only execType='Funding' fills for the configured symbol."""
+    output_path = paths.base_dir / f"{paths.symbol}_tradeType_Funding.csv"
+    log.info(
+        "Fetching execType=Funding history for %s → %s", paths.symbol, output_path
+    )
+
+    service = FilteredTradeHistoryService(
+        client=client,
+        exec_type="Funding",
+        category="linear",
+        lookback_days=lookback_days,
+    )
+    exporter = make_funding_exporter(paths.symbol, output_dir=paths.base_dir)
+
+    try:
+        history = service.get_history(paths.symbol)
+    except BybitAPIError as exc:
+        log.error("Could not fetch Funding executions for %s: %s", paths.symbol, exc)
+        return
+
+    if not history.trades:
+        log.warning(
+            "No Funding executions found for %s — %s not written",
+            paths.symbol,
+            output_path,
+        )
+        return
+
+    path = exporter.export(history)
+    log.info("Exported %d Funding execution(s) to %s", len(history.trades), path)
 
 
 def _run_order_history(

@@ -56,6 +56,8 @@ ALL_ACTIONS: list[str] = [
     "balances",
     "futures_positions",
     "trade_history",
+    "get_trade_type_trade",
+    "get_trade_type_funding",
     "order_history",
     "recent_executions",
     "generate_lifo_report",
@@ -261,9 +263,7 @@ def _parse(data: dict, config_path: pathlib.Path) -> AppConfig:
         if not isinstance(request_settings_raw, dict):
             raise ConfigError(f"'request_settings' must be an object in {config_path}")
         if not isinstance(futures_grid_bots_raw, dict):
-            raise ConfigError(
-                f"'futures_grid_bots' must be an object in {config_path}"
-            )
+            raise ConfigError(f"'futures_grid_bots' must be an object in {config_path}")
 
         logging_cfg = LoggingConfig(
             enabled=bool(log_raw.get("enabled", True)),
