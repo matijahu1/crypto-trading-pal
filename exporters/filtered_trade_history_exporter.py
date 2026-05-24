@@ -7,8 +7,8 @@ TradeHistoryExporter, so that class is reused directly.  Only the
 output filename differs.
 
 Filename conventions:
-    Trade   execType  →  data/<SYMBOL>_tradeType_Trade.csv
-    Funding execType  →  data/<SYMBOL>_tradeType_Funding.csv
+    Trade   execType  →  data/<SYMBOL>_TradesTypeTrade.csv
+    Funding execType  →  data/<SYMBOL>_TradesTypeFunding.csv
 
 Public API:
     make_trade_type_exporter(symbol, exec_type, output_dir="data")
@@ -48,7 +48,7 @@ def make_trade_type_exporter(
         TradeHistoryExporter configured for
         <output_dir>/<SYMBOL>_tradeType_<exec_type>.csv
     """
-    filename = f"{symbol.upper()}_tradeType_{exec_type}.csv"
+    filename = f"{symbol.upper()}_TradesType{exec_type}.csv"
     return TradeHistoryExporter(pathlib.Path(output_dir) / filename)
 
 
@@ -63,7 +63,7 @@ def make_trade_exporter(
         output_dir: Directory to write into (default: data/).
 
     Returns:
-        TradeHistoryExporter for <output_dir>/<SYMBOL>_tradeType_Trade.csv
+        TradeHistoryExporter for <output_dir>/<SYMBOL>TradesTypeTrade.csv
     """
     return make_trade_type_exporter(symbol, "Trade", output_dir)
 
@@ -79,6 +79,6 @@ def make_funding_exporter(
         output_dir: Directory to write into (default: data/).
 
     Returns:
-        TradeHistoryExporter for <output_dir>/<SYMBOL>_tradeType_Funding.csv
+        TradeHistoryExporter for <output_dir>/<SYMBOL>_TradesTypeFunding.csv
     """
     return make_trade_type_exporter(symbol, "Funding", output_dir)

@@ -32,8 +32,6 @@ from exporters.trade_history_exporter import HEADERS, TradeHistoryExporter
 from services.filtered_trade_history import FilteredTradeHistoryService
 from services.trade_history import (
     _MS_PER_DAY,
-    LOOKBACK_DAYS,
-    MAX_WINDOW_DAYS,
     Trade,
     TradeHistory,
 )
@@ -42,9 +40,9 @@ from services.trade_history import (
 # Constants mirrored from test_trade_history.py
 # ---------------------------------------------------------------------------
 
-NOW_FIXED = 1_700_000_000_000          # 2023-11-14 22:13:20 UTC
-W1_END    = 1_700_000_000_000
-W1_START  = 1_699_395_200_000
+NOW_FIXED = 1_700_000_000_000  # 2023-11-14 22:13:20 UTC
+W1_END = 1_700_000_000_000
+W1_START = 1_699_395_200_000
 
 
 # ---------------------------------------------------------------------------
@@ -123,8 +121,8 @@ def read_csv(path: pathlib.Path) -> list[list[str]]:
 # ---------------------------------------------------------------------------
 
 MIXED_TRADES = [
-    raw("t1", W1_END - 1_000, "Trade",   "0.10"),
-    raw("t2", W1_END - 2_000, "Trade",   "0.08"),
+    raw("t1", W1_END - 1_000, "Trade", "0.10"),
+    raw("t2", W1_END - 2_000, "Trade", "0.08"),
     raw("f1", W1_END - 3_000, "Funding", "-0.02"),
     raw("f2", W1_END - 4_000, "Funding", "-0.01"),
     raw("b1", W1_END - 5_000, "BustTrade", "0.00"),
@@ -142,6 +140,7 @@ class TestFilteredByTrade:
     @pytest.fixture(autouse=True)
     def freeze_time(self, monkeypatch):
         import services.trade_history as m
+
         monkeypatch.setattr(m, "_now_ms", lambda: NOW_FIXED)
 
     def _svc(self, trades=MIXED_TRADES):
@@ -188,7 +187,9 @@ class TestFilteredByTrade:
 
     def test_symbol_uppercased_before_passing_to_client(self):
         client = StubTradeClient(MIXED_TRADES)
-        FilteredTradeHistoryService(client, exec_type="Trade", lookback_days=7).get_history("zecusdt")
+        FilteredTradeHistoryService(
+            client, exec_type="Trade", lookback_days=7
+        ).get_history("zecusdt")
         assert client.last_symbol == "ZECUSDT"
 
     def test_trades_are_trade_instances(self):
@@ -220,6 +221,7 @@ class TestFilteredByFunding:
     @pytest.fixture(autouse=True)
     def freeze_time(self, monkeypatch):
         import services.trade_history as m
+
         monkeypatch.setattr(m, "_now_ms", lambda: NOW_FIXED)
 
     def _svc(self, trades=MIXED_TRADES):
@@ -269,10 +271,10 @@ class TestFilteredByFunding:
 
 
 class TestFilteredEdgeCases:
-
     @pytest.fixture(autouse=True)
     def freeze_time(self, monkeypatch):
         import services.trade_history as m
+
         monkeypatch.setattr(m, "_now_ms", lambda: NOW_FIXED)
 
     def test_empty_source_returns_empty_trade_list(self):
@@ -357,49 +359,55 @@ class TestFilteredExporterFactories:
 
     def test_make_trade_type_exporter_trade_filename(self, tmp_path):
         exp = make_trade_type_exporter("ZECUSDT", "Trade", output_dir=tmp_path)
-        assert exp._output_path == tmp_path / "ZECUSDT_tradeType_Trade.csv"
+        assert exp._output_path == tmp_path / "ZECUSDT_TradesTypeTrade.csv"
 
     def test_make_trade_type_exporter_funding_filename(self, tmp_path):
         exp = make_trade_type_exporter("ZECUSDT", "Funding", output_dir=tmp_path)
-        assert exp._output_path == tmp_path / "ZECUSDT_tradeType_Funding.csv"
+        assert exp._output_path == tmp_path / "ZECUSDT_TradesTypeFunding.csv"
 
     def test_make_trade_type_exporter_uppercases_symbol(self, tmp_path):
         exp = make_trade_type_exporter("zecusdt", "Trade", output_dir=tmp_path)
-        assert exp._output_path.name == "ZECUSDT_tradeType_Trade.csv"
+        assert exp._output_path.name == "ZECUSDT_TradesTypeTrade.csv"
 
     def test_make_trade_type_exporter_default_dir_is_data(self):
         exp = make_trade_type_exporter("ZECUSDT", "Trade")
-        assert exp._output_path == pathlib.Path("data") / "ZECUSDT_tradeType_Trade.csv"
+        assert exp._output_path == pathlib.Path("data") / "ZECUSDT_TradesTypeTrade.csv"
 
     def test_make_trade_exporter_filename(self, tmp_path):
         exp = make_trade_exporter("ZECUSDT", output_dir=tmp_path)
-        assert exp._output_path == tmp_path / "ZECUSDT_tradeType_Trade.csv"
+        assert exp._output_path == tmp_path / "ZECUSDT_TradesTypeTrade.csv"
 
     def test_make_trade_exporter_default_dir(self):
         exp = make_trade_exporter("ZECUSDT")
-        assert exp._output_path == pathlib.Path("data") / "ZECUSDT_tradeType_Trade.csv"
+        assert exp._output_path == pathlib.Path("data") / "ZECUSDT_TradesTypeTrade.csv"
 
     def test_make_funding_exporter_filename(self, tmp_path):
         exp = make_funding_exporter("ZECUSDT", output_dir=tmp_path)
-        assert exp._output_path == tmp_path / "ZECUSDT_tradeType_Funding.csv"
+        assert exp._output_path == tmp_path / "ZECUSDT_TradesTypeFunding.csv"
 
     def test_make_funding_exporter_default_dir(self):
         exp = make_funding_exporter("ZECUSDT")
-        assert exp._output_path == pathlib.Path("data") / "ZECUSDT_tradeType_Funding.csv"
+        assert (
+            exp._output_path == pathlib.Path("data") / "ZECUSDT_TradesTypeFunding.csv"
+        )
 
     def test_make_trade_exporter_returns_trade_history_exporter(self, tmp_path):
-        assert isinstance(make_trade_exporter("ZECUSDT", output_dir=tmp_path), TradeHistoryExporter)
+        assert isinstance(
+            make_trade_exporter("ZECUSDT", output_dir=tmp_path), TradeHistoryExporter
+        )
 
     def test_make_funding_exporter_returns_trade_history_exporter(self, tmp_path):
-        assert isinstance(make_funding_exporter("ZECUSDT", output_dir=tmp_path), TradeHistoryExporter)
+        assert isinstance(
+            make_funding_exporter("ZECUSDT", output_dir=tmp_path), TradeHistoryExporter
+        )
 
     def test_make_trade_type_exporter_uppercases_symbol_alias(self, tmp_path):
         exp = make_trade_exporter("zecusdt", output_dir=tmp_path)
-        assert exp._output_path.name == "ZECUSDT_tradeType_Trade.csv"
+        assert exp._output_path.name == "ZECUSDT_TradesTypeTrade.csv"
 
     def test_make_funding_exporter_uppercases_symbol_alias(self, tmp_path):
         exp = make_funding_exporter("zecusdt", output_dir=tmp_path)
-        assert exp._output_path.name == "ZECUSDT_tradeType_Funding.csv"
+        assert exp._output_path.name == "ZECUSDT_TradesTypeFunding.csv"
 
     # -----------------------------------------------------------------------
     # End-to-end: factory → export → CSV content
@@ -427,54 +435,68 @@ class TestFilteredExporterFactories:
     def test_trade_exporter_writes_correct_headers(self, tmp_path):
         exp = make_trade_exporter("ZECUSDT", output_dir=tmp_path)
         exp.export(self._sample_history("Trade"))
-        rows = read_csv(tmp_path / "ZECUSDT_tradeType_Trade.csv")
+        rows = read_csv(tmp_path / "ZECUSDT_TradesTypeTrade.csv")
         assert rows[0] == HEADERS
 
     def test_funding_exporter_writes_correct_headers(self, tmp_path):
         exp = make_funding_exporter("ZECUSDT", output_dir=tmp_path)
         exp.export(self._sample_history("Funding"))
-        rows = read_csv(tmp_path / "ZECUSDT_tradeType_Funding.csv")
+        rows = read_csv(tmp_path / "ZECUSDT_TradesTypeFunding.csv")
         assert rows[0] == HEADERS
 
     def test_trade_exporter_writes_data_row(self, tmp_path):
         exp = make_trade_exporter("ZECUSDT", output_dir=tmp_path)
         exp.export(self._sample_history("Trade"))
-        rows = read_csv(tmp_path / "ZECUSDT_tradeType_Trade.csv")
+        rows = read_csv(tmp_path / "ZECUSDT_TradesTypeTrade.csv")
         assert len(rows) == 2  # header + 1 trade
 
     def test_funding_exporter_writes_data_row(self, tmp_path):
         exp = make_funding_exporter("ZECUSDT", output_dir=tmp_path)
         exp.export(self._sample_history("Funding"))
-        rows = read_csv(tmp_path / "ZECUSDT_tradeType_Funding.csv")
+        rows = read_csv(tmp_path / "ZECUSDT_TradesTypeFunding.csv")
         assert len(rows) == 2  # header + 1 funding
 
     def test_trade_exporter_correct_values(self, tmp_path):
         exp = make_trade_exporter("ZECUSDT", output_dir=tmp_path)
         exp.export(self._sample_history("Trade"))
-        rows = read_csv(tmp_path / "ZECUSDT_tradeType_Trade.csv")
+        rows = read_csv(tmp_path / "ZECUSDT_TradesTypeTrade.csv")
         assert rows[1] == [
-            "x-001", "ZECUSDT", "Buy", "30.50", "1", "Trade", "0.05",
-            "2023-11-14", "22:13:20",
+            "x-001",
+            "ZECUSDT",
+            "Buy",
+            "30.50",
+            "1",
+            "Trade",
+            "0.05",
+            "2023-11-14",
+            "22:13:20",
         ]
 
     def test_funding_exporter_correct_values(self, tmp_path):
         exp = make_funding_exporter("ZECUSDT", output_dir=tmp_path)
         exp.export(self._sample_history("Funding"))
-        rows = read_csv(tmp_path / "ZECUSDT_tradeType_Funding.csv")
+        rows = read_csv(tmp_path / "ZECUSDT_TradesTypeFunding.csv")
         assert rows[1] == [
-            "x-001", "ZECUSDT", "Buy", "30.50", "1", "Funding", "0.05",
-            "2023-11-14", "22:13:20",
+            "x-001",
+            "ZECUSDT",
+            "Buy",
+            "30.50",
+            "1",
+            "Funding",
+            "0.05",
+            "2023-11-14",
+            "22:13:20",
         ]
 
     def test_column_count_is_nine(self, tmp_path):
         exp = make_trade_exporter("ZECUSDT", output_dir=tmp_path)
         exp.export(self._sample_history("Trade"))
-        rows = read_csv(tmp_path / "ZECUSDT_tradeType_Trade.csv")
+        rows = read_csv(tmp_path / "ZECUSDT_TradesTypeTrade.csv")
         assert all(len(r) == 9 for r in rows)
 
     def test_empty_history_writes_header_only(self, tmp_path):
         empty = TradeHistory(symbol="ZECUSDT", category="linear", trades=[])
         exp = make_trade_exporter("ZECUSDT", output_dir=tmp_path)
         exp.export(empty)
-        rows = read_csv(tmp_path / "ZECUSDT_tradeType_Trade.csv")
+        rows = read_csv(tmp_path / "ZECUSDT_TradesTypeTrade.csv")
         assert rows == [HEADERS]

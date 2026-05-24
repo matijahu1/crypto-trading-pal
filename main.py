@@ -44,14 +44,14 @@ from api.bybit_client import BybitAPIError, BybitClient
 from config.config_loader import AppConfig, ConfigError, load_config
 from config.logging_setup import setup_logging
 from exporters.balance_exporter import BalanceExporter
-from exporters.futures_position_exporter import FuturesPositionExporter
-from exporters.order_history_exporter import OrderHistoryExporter
-from exporters.order_history_merger import OrderHistoryMerger
-from exporters.path_provider import PathProvider
 from exporters.filtered_trade_history_exporter import (
     make_funding_exporter,
     make_trade_exporter,
 )
+from exporters.futures_position_exporter import FuturesPositionExporter
+from exporters.order_history_exporter import OrderHistoryExporter
+from exporters.order_history_merger import OrderHistoryMerger
+from exporters.path_provider import PathProvider
 from exporters.trade_history_exporter import TradeHistoryExporter
 from services.balance import BalanceService
 from services.filtered_trade_history import FilteredTradeHistoryService
@@ -126,8 +126,12 @@ def _build_registry(
         "balances": lambda: _run_balances(client, paths),
         "futures_positions": lambda: _run_futures_positions(client, paths),
         "trade_history": lambda: _run_trade_history(client, paths, lookback_days),
-        "get_trade_type_trade": lambda: _run_trade_type_trade(client, paths, lookback_days),
-        "get_trade_type_funding": lambda: _run_trade_type_funding(client, paths, lookback_days),
+        "get_trade_type_trade": lambda: _run_trade_type_trade(
+            client, paths, lookback_days
+        ),
+        "get_trade_type_funding": lambda: _run_trade_type_funding(
+            client, paths, lookback_days
+        ),
         "order_history": lambda: _run_order_history(client, paths, lookback_days),
         "recent_executions": lambda: _run_recent_executions(
             client, paths, paths.symbol, limit=config.recent_executions_limit
@@ -234,10 +238,8 @@ def _run_trade_type_trade(
     client: BybitClient, paths: PathProvider, lookback_days: int
 ) -> None:
     """Fetch and export only execType='Trade' fills for the configured symbol."""
-    output_path = paths.base_dir / f"{paths.symbol}_tradeType_Trade.csv"
-    log.info(
-        "Fetching execType=Trade history for %s → %s", paths.symbol, output_path
-    )
+    output_path = paths.base_dir / f"{paths.symbol}_TradesTypeTrade.csv"
+    log.info("Fetching execType=Trade history for %s → %s", paths.symbol, output_path)
 
     service = FilteredTradeHistoryService(
         client=client,
@@ -270,9 +272,7 @@ def _run_trade_type_funding(
 ) -> None:
     """Fetch and export only execType='Funding' fills for the configured symbol."""
     output_path = paths.base_dir / f"{paths.symbol}_tradeType_Funding.csv"
-    log.info(
-        "Fetching execType=Funding history for %s → %s", paths.symbol, output_path
-    )
+    log.info("Fetching execType=Funding history for %s → %s", paths.symbol, output_path)
 
     service = FilteredTradeHistoryService(
         client=client,
