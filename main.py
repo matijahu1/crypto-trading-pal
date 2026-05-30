@@ -48,6 +48,7 @@ from exporters.filtered_trade_history_exporter import (
     make_funding_exporter,
     make_trade_exporter,
 )
+from exporters.filtered_trade_history_merger import FilteredTradeHistoryMerger
 from exporters.futures_position_exporter import FuturesPositionExporter
 from exporters.order_history_exporter import OrderHistoryExporter
 from exporters.order_history_merger import OrderHistoryMerger
@@ -57,7 +58,7 @@ from services.balance import BalanceService
 from services.filtered_trade_history import FilteredTradeHistoryService
 from services.futures_position import FuturesPositionService
 from services.order_history import OrderHistory, OrderHistoryService
-from services.trade_history import TradeHistoryService
+from services.trade_history import TradeHistory, TradeHistoryService
 
 log = logging.getLogger(__name__)
 
@@ -237,25 +238,48 @@ def _run_trade_history(
 def _run_trade_type_trade(
     client: BybitClient, paths: PathProvider, lookback_days: int
 ) -> None:
-    """Fetch and export only execType='Trade' fills for the configured symbol."""
-    output_path = paths.base_dir / f"{paths.symbol}_TradesTypeTrade.csv"
-    log.info("Fetching execType=Trade history for %s → %s", paths.symbol, output_path)
+    """
+    Fetch execType='Trade' fills and merge them into the existing CSV.
 
+    Strategy — Load-Fetch-Merge-Export:
+      1. LOAD  — FilteredTradeHistoryMerger reads any records already present
+                 in the output CSV; starts from an empty baseline on first run.
+      2. FETCH — FilteredTradeHistoryService requests execType='Trade' trades
+                 from the API for the configured lookback window.
+      3. MERGE — Merger deduplicates by trade_id and sorts (date, time) DESC.
+      4. EXPORT — The combined list is written back to the same CSV (overwrite).
+
+    Only genuinely new trade_ids are added; duplicates within the lookback
+    window are silently dropped.
+    """
+    output_path = paths.base_dir / f"{paths.symbol}_TradesTypeTrade.csv"
+    log.info("Syncing execType=Trade history for %s → %s", paths.symbol, output_path)
+
+    # 1. LOAD
+    merger = FilteredTradeHistoryMerger(output_path)
+    log.info(
+        "Loaded %d existing Trade record(s) from %s",
+        merger.existing_count,
+        output_path,
+    )
+
+    # 2. FETCH
     service = FilteredTradeHistoryService(
         client=client,
         exec_type="Trade",
         category="linear",
         lookback_days=lookback_days,
     )
-    exporter = make_trade_exporter(paths.symbol, output_dir=paths.base_dir)
-
     try:
-        history = service.get_history(paths.symbol)
+        fresh = service.get_history(paths.symbol)
     except BybitAPIError as exc:
         log.error("Could not fetch Trade executions for %s: %s", paths.symbol, exc)
         return
 
-    if not history.trades:
+    # 3. MERGE
+    combined = merger.merge(fresh.trades)
+
+    if not combined:
         log.warning(
             "No Trade executions found for %s — %s not written",
             paths.symbol,
@@ -263,32 +287,66 @@ def _run_trade_type_trade(
         )
         return
 
-    path = exporter.export(history)
-    log.info("Exported %d Trade execution(s) to %s", len(history.trades), path)
+    # 4. EXPORT
+    exporter = make_trade_exporter(paths.symbol, output_dir=paths.base_dir)
+    path = exporter.export(
+        TradeHistory(symbol=paths.symbol, category="linear", trades=combined)
+    )
+    new_count = len(combined) - merger.existing_count
+    log.info(
+        "Exported %d Trade execution(s) to %s  (%d new, %d already on disk)",
+        len(combined),
+        path,
+        max(0, new_count),
+        merger.existing_count,
+    )
 
 
 def _run_trade_type_funding(
     client: BybitClient, paths: PathProvider, lookback_days: int
 ) -> None:
-    """Fetch and export only execType='Funding' fills for the configured symbol."""
-    output_path = paths.base_dir / f"{paths.symbol}_tradeType_Funding.csv"
-    log.info("Fetching execType=Funding history for %s → %s", paths.symbol, output_path)
+    """
+    Fetch execType='Funding' fills and merge them into the existing CSV.
 
+    Strategy — Load-Fetch-Merge-Export:
+      1. LOAD  — FilteredTradeHistoryMerger reads any records already present
+                 in the output CSV; starts from an empty baseline on first run.
+      2. FETCH — FilteredTradeHistoryService requests execType='Funding' trades
+                 from the API for the configured lookback window.
+      3. MERGE — Merger deduplicates by trade_id and sorts (date, time) DESC.
+      4. EXPORT — The combined list is written back to the same CSV (overwrite).
+
+    Only genuinely new trade_ids are added; duplicates within the lookback
+    window are silently dropped.
+    """
+    output_path = paths.base_dir / f"{paths.symbol}_tradeType_Funding.csv"
+    log.info("Syncing execType=Funding history for %s → %s", paths.symbol, output_path)
+
+    # 1. LOAD
+    merger = FilteredTradeHistoryMerger(output_path)
+    log.info(
+        "Loaded %d existing Funding record(s) from %s",
+        merger.existing_count,
+        output_path,
+    )
+
+    # 2. FETCH
     service = FilteredTradeHistoryService(
         client=client,
         exec_type="Funding",
         category="linear",
         lookback_days=lookback_days,
     )
-    exporter = make_funding_exporter(paths.symbol, output_dir=paths.base_dir)
-
     try:
-        history = service.get_history(paths.symbol)
+        fresh = service.get_history(paths.symbol)
     except BybitAPIError as exc:
         log.error("Could not fetch Funding executions for %s: %s", paths.symbol, exc)
         return
 
-    if not history.trades:
+    # 3. MERGE
+    combined = merger.merge(fresh.trades)
+
+    if not combined:
         log.warning(
             "No Funding executions found for %s — %s not written",
             paths.symbol,
@@ -296,8 +354,19 @@ def _run_trade_type_funding(
         )
         return
 
-    path = exporter.export(history)
-    log.info("Exported %d Funding execution(s) to %s", len(history.trades), path)
+    # 4. EXPORT
+    exporter = make_funding_exporter(paths.symbol, output_dir=paths.base_dir)
+    path = exporter.export(
+        TradeHistory(symbol=paths.symbol, category="linear", trades=combined)
+    )
+    new_count = len(combined) - merger.existing_count
+    log.info(
+        "Exported %d Funding execution(s) to %s  (%d new, %d already on disk)",
+        len(combined),
+        path,
+        max(0, new_count),
+        merger.existing_count,
+    )
 
 
 def _run_order_history(
