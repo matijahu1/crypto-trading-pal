@@ -5,7 +5,7 @@
         "log_to_file": true
     },
     "paths": {
-        "log_file": "bybit_bot.log",
+        "log_file": "crypto_pal.log",
         "exported_dir": "data/exported"
     },
     "actions": {
@@ -13,15 +13,22 @@
             "balances",
             "futures_positions",
             "trade_history",
+            "get_trade_type_trade",
+            "get_trade_type_funding",
             "order_history",
             "recent_executions",
             "generate_lifo_report",
-            "open_orders"
+            "open_orders",
+            "grid_bots"
         ]
     },
     "request_settings": {
         "symbol": "CCUSDT",
         "lookback_days_default": 60,
         "recent_executions_limit": 10
-    }
+    },
+    "futures_grid_bots": {
+        "CCUSDT": ["123456"],
+        "ZECUSDT": ["345678", "333222"]
+    }    
 }
