@@ -15,12 +15,13 @@ Available action names:
   "balances"             → data/exported/balance.csv
   "futures_positions"    → data/exported/futures_positions.csv
   "trade_history"        → data/exported/<symbol>_tradeHistory.csv
-  "get_trade_type_trade"   → data/exported/<symbol>_tradeType_Trade.csv
+  "get_trade_type_trade"   → data/exported/<symbol>_TradesTypeTrade.csv
   "get_trade_type_funding" → data/exported/<symbol>_tradeType_Funding.csv
   "order_history"        → data/exported/<symbol>_orderHistory.csv
   "recent_executions"    → data/exported/ACCOUNT_recent_fills.csv
   "open_orders"          → data/exported/<symbol>_openOrders.csv
   "generate_lifo_report" → data/exported/<symbol>_lifo_inventory.csv
+  "generate_lifo_report_v2" → data/exported/<symbol>_lifo_report.csv
   "grid_bots"            → data/exported/<symbol>_FuturesGridBots.csv
 
 Run:
@@ -139,6 +140,7 @@ def _build_registry(
         ),
         "open_orders": lambda: _run_open_orders(client, paths),
         "generate_lifo_report": lambda: _run_generate_lifo_report(client, paths),
+        "generate_lifo_report_v2": lambda: _run_generate_lifo_report_v2(client, paths),
         "grid_bots": lambda: _run_grid_bots(client, config, paths),
     }
 
@@ -555,6 +557,80 @@ def _run_generate_lifo_report(client: BybitClient, paths: PathProvider) -> None:
         partial_count,
         closed_count,
         total_pnl,
+    )
+
+
+def _run_generate_lifo_report_v2(client: BybitClient, paths: PathProvider) -> None:
+    """
+    Generate a LIFO inventory report from the trade-level fill CSV.
+
+    Input dependency:
+        ``{SYMBOL}_TradesTypeTrade.csv`` in the configured export directory.
+        Run the ``get_trade_type_trade`` action first if the file is absent.
+
+    Compared to generate_lifo_report (v1):
+        - Source: _TradesTypeTrade.csv instead of _orderHistory.csv
+        - Output: _lifo_report.csv
+        - Extra columns: total_fees, net_pnl (derived from per-fill trading_fee)
+    """
+    from exporters.lifo_report_v2_exporter import make_exporter
+    from services.lifo_report_v2 import LifoReportV2Service
+
+    input_path = paths.base_dir / f"{paths.symbol}_TradesTypeTrade.csv"
+    output_path = paths.base_dir / f"{paths.symbol}_lifo_report.csv"
+
+    log.info(
+        "Generating LIFO v2 report for %s  %s → %s",
+        paths.symbol,
+        input_path,
+        output_path,
+    )
+
+    if not input_path.exists():
+        log.error(
+            "Trade history file not found for %s. "
+            "Please run 'get_trade_type_trade' first. (Expected: %s)",
+            paths.symbol,
+            input_path,
+        )
+        return
+
+    service = LifoReportV2Service(input_path)
+    try:
+        records = service.generate()
+    except (FileNotFoundError, ValueError) as exc:
+        log.error("Could not generate LIFO v2 report for %s: %s", paths.symbol, exc)
+        return
+
+    if not records:
+        log.warning(
+            "No lot records produced for %s — %s was not written",
+            paths.symbol,
+            output_path,
+        )
+        return
+
+    exporter = make_exporter(paths.symbol, output_dir=paths.base_dir)
+    path = exporter.export(records)
+
+    open_count = sum(1 for r in records if r.status == "OPEN")
+    partial_count = sum(1 for r in records if r.status == "PARTIAL")
+    closed_count = sum(1 for r in records if r.status == "CLOSED")
+    total_pnl = sum(r.realized_pnl for r in records)
+    total_fees = sum(r.total_fees for r in records)
+    net_pnl = sum(r.net_pnl for r in records)
+
+    log.info(
+        "Exported %d lot(s) to %s — OPEN: %d, PARTIAL: %d, CLOSED: %d | "
+        "Gross PnL: %.4f  Fees: %.4f  Net PnL: %.4f",
+        len(records),
+        path,
+        open_count,
+        partial_count,
+        closed_count,
+        total_pnl,
+        total_fees,
+        net_pnl,
     )
 
 

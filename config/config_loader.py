@@ -61,6 +61,7 @@ ALL_ACTIONS: list[str] = [
     "order_history",
     "recent_executions",
     "generate_lifo_report",
+    "generate_lifo_report_v2",
     "open_orders",
     "grid_bots",
 ]
