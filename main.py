@@ -139,7 +139,6 @@ def _build_registry(
             client, paths, paths.symbol, limit=config.recent_executions_limit
         ),
         "open_orders": lambda: _run_open_orders(client, paths),
-        "generate_lifo_report": lambda: _run_generate_lifo_report(client, paths),
         "generate_lifo_report_v2": lambda: _run_generate_lifo_report_v2(client, paths),
         "grid_bots": lambda: _run_grid_bots(client, config, paths),
     }
@@ -497,66 +496,6 @@ def _run_open_orders(client: BybitClient, paths: PathProvider) -> None:
         "Exported %d open order(s) to %s",
         len(snapshot.orders),
         path,
-    )
-
-
-def _run_generate_lifo_report(client: BybitClient, paths: PathProvider) -> None:
-    """
-    Generate a LIFO inventory report from the existing order history CSV.
-
-    Input dependency:
-        ``{SYMBOL}_orderHistory.csv`` in the configured export directory.
-        Run the ``order_history`` action first if the file is absent.
-    """
-    from exporters.lifo_report_exporter import LifoReportExporter
-    from services.lifo_report import LifoReportService
-
-    input_path = paths.order_history_path()
-    output_path = paths.lifo_report_path()
-
-    log.info("Generating LIFO inventory report for %s → %s", paths.symbol, output_path)
-
-    if not input_path.exists():
-        log.error(
-            "Error: Order history file not found for %s. "
-            "Please run 'order_history' first. (Expected: %s)",
-            paths.symbol,
-            input_path,
-        )
-        return
-
-    service = LifoReportService(input_path)
-    try:
-        records = service.generate()
-    except (FileNotFoundError, ValueError) as exc:
-        log.error("Could not generate LIFO report for %s: %s", paths.symbol, exc)
-        return
-
-    if not records:
-        log.warning(
-            "No lot records produced for %s — %s was not written",
-            paths.symbol,
-            output_path,
-        )
-        return
-
-    exporter = LifoReportExporter(output_path)
-    path = exporter.export(records)
-
-    open_count = sum(1 for r in records if r.status == "OPEN")
-    partial_count = sum(1 for r in records if r.status == "PARTIAL")
-    closed_count = sum(1 for r in records if r.status == "CLOSED")
-    total_pnl = sum(r.realized_pnl for r in records)
-
-    log.info(
-        "Exported %d lot(s) to %s — OPEN: %d, PARTIAL: %d, CLOSED: %d | "
-        "Total realized PnL: %.4f",
-        len(records),
-        path,
-        open_count,
-        partial_count,
-        closed_count,
-        total_pnl,
     )
 
 

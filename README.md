@@ -53,7 +53,8 @@ Create a directory named `/data` in the project root. This folder will store you
    * `"trade_history"`
    * `"order_history"`
    * `"recent_executions"`
-   * `"generate_lifo_report"`
+   * `"get_trade_type_trade"`
+   * `"generate_lifo_report_v2"`
    * `"open_orders"`   
 
 > [!NOTE]
